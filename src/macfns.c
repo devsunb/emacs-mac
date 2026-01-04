@@ -3270,6 +3270,23 @@ The coordinates X and Y are interpreted in pixels relative to a position
   return Qnil;
 }
 
+DEFUN ("mac-activate-application", Fmac_activate_application,
+       Smac_activate_application, 1, 1, 0,
+       doc: /* Activate the application with the specified NAME.
+NAME is a string specifying the localized name of the application.
+Returns t if successful, nil otherwise.  */)
+  (Lisp_Object name)
+{
+  bool result;
+
+  CHECK_STRING (name);
+  block_input ();
+  result = mac_activate_application (name);
+  unblock_input ();
+
+  return result ? Qt : Qnil;
+}
+
 DEFUN ("x-begin-drag", Fx_begin_drag, Sx_begin_drag, 3, 6, 0,
        doc: /* SKIP: real doc in xfns.c.  */)
   (Lisp_Object targets, Lisp_Object action, Lisp_Object frame,
@@ -5520,6 +5537,7 @@ respectively.  */);
   defsubr (&Smac_frame_restack);
   defsubr (&Smac_mouse_absolute_pixel_position);
   defsubr (&Smac_set_mouse_absolute_pixel_position);
+  defsubr (&Smac_activate_application);
   defsubr (&Sx_create_frame);
   defsubr (&Sx_open_connection);
   defsubr (&Sx_close_connection);

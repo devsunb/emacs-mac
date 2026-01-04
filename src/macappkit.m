@@ -964,6 +964,28 @@ mac_is_current_process_frontmost (void)
   return [[NSRunningApplication currentApplication] isActive];
 }
 
+/* Activate the application with the specified name.  Return true if
+   successful.  */
+
+bool
+mac_activate_application (Lisp_Object name)
+{
+  NSString *appName = [NSString stringWithLispString:name];
+  __block bool result = false;
+
+  mac_within_gui (^{
+      for (NSRunningApplication *app in
+	     NSWorkspace.sharedWorkspace.runningApplications)
+	if ([app.localizedName isEqualToString:appName])
+	  {
+	    result = [app activateWithOptions:0];
+	    break;
+	  }
+    });
+
+  return result;
+}
+
 void
 mac_bring_current_process_to_front (bool front_window_only_p)
 {
@@ -1234,6 +1256,12 @@ static bool handling_queued_nsevents_p;
 	   name:NSWorkspaceWillSleepNotification
 	 object:nil];
 
+  [[[NSWorkspace sharedWorkspace] notificationCenter]
+    addObserver:self
+       selector:@selector(workspaceDidActivateApplication:)
+	   name:NSWorkspaceDidActivateApplicationNotification
+	 object:nil];
+
   [NSApp registerUserInterfaceItemSearchHandler:self];
   Vmac_help_topics = Qnil;
 
@@ -1291,6 +1319,18 @@ static bool handling_queued_nsevents_p;
 - (BOOL)applicationSupportsSecureRestorableState:(NSApplication *)app
 {
   return YES;
+}
+
+- (void)workspaceDidActivateApplication:(NSNotification *)notification
+{
+  NSRunningApplication *app =
+    [notification.userInfo objectForKey:NSWorkspaceApplicationKey];
+  if (app && ![app isEqual:[NSRunningApplication currentApplication]])
+    {
+      NSString *appName = [app localizedName];
+      if (appName)
+	Vmac_previous_application = [appName lispString];
+    }
 }
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification
