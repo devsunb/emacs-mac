@@ -4499,7 +4499,17 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 	      }
 
 	    if (activate_p)
-	      [window makeKeyAndOrderFront:nil];
+	      {
+		if (!mac_is_current_process_frontmost ())
+		  {
+		    if ([NSApp activationPolicy]
+			== NSApplicationActivationPolicyProhibited)
+		      [NSApp setActivationPolicy:
+			       NSApplicationActivationPolicyRegular];
+		    [NSApp activateIgnoringOtherApps:YES];
+		  }
+		[window makeKeyAndOrderFront:nil];
+	      }
 	    else
 	      [window orderFront:nil];
 
