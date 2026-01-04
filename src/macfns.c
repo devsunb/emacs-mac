@@ -3270,6 +3270,24 @@ The coordinates X and Y are interpreted in pixels relative to a position
   return Qnil;
 }
 
+DEFUN ("mac-activate-application", Fmac_activate_application,
+       Smac_activate_application, 1, 1, 0,
+       doc: /* Activate the application with the specified BUNDLE-ID.
+BUNDLE-ID is a string specifying the bundle identifier of the application
+\(e.g., \"com.apple.Safari\").
+Returns t if successful, nil otherwise.  */)
+  (Lisp_Object bundle_id)
+{
+  bool result;
+
+  CHECK_STRING (bundle_id);
+  block_input ();
+  result = mac_activate_application (bundle_id);
+  unblock_input ();
+
+  return result ? Qt : Qnil;
+}
+
 DEFUN ("x-begin-drag", Fx_begin_drag, Sx_begin_drag, 3, 6, 0,
        doc: /* SKIP: real doc in xfns.c.  */)
   (Lisp_Object targets, Lisp_Object action, Lisp_Object frame,
@@ -5520,6 +5538,7 @@ respectively.  */);
   defsubr (&Smac_frame_restack);
   defsubr (&Smac_mouse_absolute_pixel_position);
   defsubr (&Smac_set_mouse_absolute_pixel_position);
+  defsubr (&Smac_activate_application);
   defsubr (&Sx_create_frame);
   defsubr (&Sx_open_connection);
   defsubr (&Sx_close_connection);

@@ -6234,4 +6234,11 @@ This variable has no effect on OS X 10.11 and earlier.  */);
 Emacspeak users may want to set this variable so it may not interfere
 with the system accessibility services such as VoiceOver.  */);
   mac_ignore_accessibility = false;
+
+  DEFVAR_LISP ("mac-previous-application", Vmac_previous_application,
+    doc: /* The bundle identifier of the application that was active before Emacs.
+This variable is automatically updated when another application becomes active.
+It can be used to return focus to the previous application when closing frames,
+e.g., (mac-activate-application mac-previous-application).  */);
+  Vmac_previous_application = Qnil;
 }

@@ -114,6 +114,7 @@ static void mac_within_gui_and_here (void (^) (void),
 				     void (^) (void));
 static void mac_within_gui_allowing_inner_lisp (void (^) (void));
 static void mac_within_lisp (void (^) (void));
+static void mac_within_lisp_deferred (void (^) (void));
 static void mac_within_lisp_deferred_unless_popup (void (^) (void));
 
 static void mac_draw_queue_sync(void);
@@ -964,6 +965,26 @@ mac_is_current_process_frontmost (void)
   return [[NSRunningApplication currentApplication] isActive];
 }
 
+/* Activate the application with the specified bundle identifier.
+   Return true if successful.  */
+
+bool
+mac_activate_application (Lisp_Object bundle_id)
+{
+  NSString *bundleIdentifier = [NSString stringWithLispString:bundle_id];
+  __block bool result = false;
+
+  mac_within_gui (^{
+      NSRunningApplication *app =
+	[[NSRunningApplication runningApplicationsWithBundleIdentifier:bundleIdentifier]
+	  firstObject];
+      if (app)
+	result = [app activateWithOptions:0];
+    });
+
+  return result;
+}
+
 void
 mac_bring_current_process_to_front (bool front_window_only_p)
 {
@@ -1234,6 +1255,12 @@ static bool handling_queued_nsevents_p;
 	   name:NSWorkspaceWillSleepNotification
 	 object:nil];
 
+  [[[NSWorkspace sharedWorkspace] notificationCenter]
+    addObserver:self
+       selector:@selector(workspaceDidActivateApplication:)
+	   name:NSWorkspaceDidActivateApplicationNotification
+	 object:nil];
+
   [NSApp registerUserInterfaceItemSearchHandler:self];
   Vmac_help_topics = Qnil;
 
@@ -1291,6 +1318,23 @@ static bool handling_queued_nsevents_p;
 - (BOOL)applicationSupportsSecureRestorableState:(NSApplication *)app
 {
   return YES;
+}
+
+- (void)workspaceDidActivateApplication:(NSNotification *)notification
+{
+  NSRunningApplication *app =
+    [notification.userInfo objectForKey:NSWorkspaceApplicationKey];
+  if (app && ![app isEqual:[NSRunningApplication currentApplication]])
+    {
+      NSString *bundleId = [app bundleIdentifier];
+      if (bundleId)
+	{
+	  Lisp_Object lisp_bundle_id = [bundleId lispString];
+	  mac_within_lisp_deferred (^{
+	      Vmac_previous_application = lisp_bundle_id;
+	    });
+	}
+    }
 }
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification

@@ -614,6 +614,7 @@ extern double mac_appkit_version (void);
 extern double mac_system_uptime (void);
 extern bool mac_is_current_process_frontmost (void);
 extern void mac_bring_current_process_to_front (bool);
+extern bool mac_activate_application (Lisp_Object);
 extern bool mac_trash_file (const char *, CFErrorRef *);
 extern CFStringRef mac_uti_create_with_mime_type (CFStringRef);
 extern CFStringRef mac_uti_create_with_filename_extension (CFStringRef);
