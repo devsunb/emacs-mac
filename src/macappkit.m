@@ -963,8 +963,21 @@ mac_is_current_process_frontmost (void)
   return [[NSRunningApplication currentApplication] isActive];
 }
 
-void
-mac_bring_current_process_to_front (bool front_window_only_p)
+/* Ensure the current application is allowed to create windows.  This
+   should be called from within mac_within_gui or mac_within_app blocks.  */
+
+static void
+mac_ensure_app_activation_policy (void)
+{
+  if ([NSApp activationPolicy] == NSApplicationActivationPolicyProhibited)
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+}
+
+/* Ensure the current application is activated.  This should be called
+   from within mac_within_gui or mac_within_app blocks.  */
+
+static void
+mac_ensure_app_activated (void)
 {
   NSApplicationActivationOptions options;
 
@@ -987,8 +1000,10 @@ mac_bring_current_process_to_front (bool front_window_only_p)
       emacs_abort ();
 #endif
     }
-  if (!front_window_only_p)
-    options |= NSApplicationActivateAllWindows;
+
+  mac_ensure_app_activation_policy ();
+  if (mac_is_current_process_frontmost ())
+    return;
 
 #if __clang_major__ >= 9
   if (@available (macOS 14.0, *))
@@ -4437,10 +4452,19 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 {
   EmacsWindow *window = FRAME_MAC_WINDOW_OBJECT (f);
 
-  if ([NSApp isHidden])
-    window.needsOrderFrontOnUnhide = YES;
-  else
-    mac_within_app (^{
+  mac_within_app (^{
+	mac_ensure_app_activation_policy ();
+	if ([NSApp isHidden])
+	  {
+	    if (activate_p)
+	      [NSApp unhide:nil];
+	    else
+	      {
+		window.needsOrderFrontOnUnhide = YES;
+		return;
+	      }
+	  }
+
 	struct frame *p = FRAME_PARENT_FRAME (f);
 
 	if (p)
@@ -4458,7 +4482,10 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 		[parentWindow addChildWindow:window ordered:NSWindowAbove];
 	      }
 	    if (activate_p)
-	      [window makeKeyWindow];
+	      {
+		mac_ensure_app_activated ();
+		[window makeKeyWindow];
+	      }
 	  }
 	else
 	  {
@@ -4507,7 +4534,10 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 	      }
 
 	    if (activate_p)
-	      [window makeKeyAndOrderFront:nil];
+	      {
+		mac_ensure_app_activated ();
+		[window makeKeyAndOrderFront:nil];
+	      }
 	    else
 	      [window orderFront:nil];
 
@@ -4578,7 +4608,8 @@ mac_show_frame_window (struct frame *f)
 
   if (![window isVisible])
     mac_bring_frame_window_to_front_and_activate (f,
-						  !FRAME_NO_FOCUS_ON_MAP (f));
+						  !(FRAME_TOOLTIP_P (f)
+						    || FRAME_NO_FOCUS_ON_MAP (f)));
 }
 
 OSStatus
@@ -4609,7 +4640,10 @@ mac_activate_frame_window (struct frame *f)
 {
   NSWindow *window = FRAME_MAC_WINDOW_OBJECT (f);
 
-  mac_within_gui (^{[window makeKeyWindow];});
+  mac_within_gui (^{
+      mac_ensure_app_activated ();
+      [window makeKeyWindow];
+    });
 }
 
 static NSRect

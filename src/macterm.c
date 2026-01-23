@@ -4189,8 +4189,6 @@ mac_focus_frame (struct frame *f, bool noactivate)
   /* The arg NOACTIVATE is unused: the Mac port has been giving F the
      focus without raising it unnecessarily.  */
   block_input ();
-  if (!mac_is_current_process_frontmost ())
-    mac_bring_current_process_to_front (mac_is_frame_window_frontmost (f));
   mac_activate_frame_window (f);
   unblock_input ();
 }
