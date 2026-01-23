@@ -637,10 +637,6 @@ typedef NSInteger NSGlyphProperty;
      next left mouse down event.  */
   BOOL setupResizeTrackingSuspended;
 
-  /* Whether the window should be made visible when the application
-     gets unhidden next time.  */
-  BOOL needsOrderFrontOnUnhide;
-
   /* Positive values mean the usual -constrainFrameRect:toScreen:
      behavior is suspended.  */
   char constrainingToScreenSuspensionCount;
@@ -652,8 +648,6 @@ typedef NSInteger NSGlyphProperty;
 - (void)suspendResizeTracking:(NSEvent *)event
 	   positionAdjustment:(NSPoint)adjustment;
 - (void)resumeResizeTracking;
-- (BOOL)needsOrderFrontOnUnhide;
-- (void)setNeedsOrderFrontOnUnhide:(BOOL)flag;
 - (void)suspendConstrainingToScreen:(BOOL)flag;
 - (void)exitTabGroupOverview;
 @end

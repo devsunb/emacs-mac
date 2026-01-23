@@ -965,6 +965,21 @@ mac_is_current_process_frontmost (void)
   return [[NSRunningApplication currentApplication] isActive];
 }
 
+/* Ensure the current application is activated.  Set activation policy
+   to Regular if running outside of a bundle.  This should be called
+   from within mac_within_gui or mac_within_app blocks.  */
+
+static void
+mac_ensure_app_activated (void)
+{
+  if (!mac_is_current_process_frontmost ())
+    {
+      if ([NSApp activationPolicy] == NSApplicationActivationPolicyProhibited)
+	[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+      [NSApp activateIgnoringOtherApps:YES];
+    }
+}
+
 /* Activate the application with the specified bundle identifier.
    Return true if successful.  */
 
@@ -2255,24 +2270,8 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
   [super sendEvent:event];
 }
 
-- (BOOL)needsOrderFrontOnUnhide
-{
-  return needsOrderFrontOnUnhide;
-}
-
-- (void)setNeedsOrderFrontOnUnhide:(BOOL)flag
-{
-  needsOrderFrontOnUnhide = flag;
-}
-
 - (void)applicationDidUnhide:(NSNotification *)notification
 {
-  if (needsOrderFrontOnUnhide)
-    {
-      [self orderFront:nil];
-      needsOrderFrontOnUnhide = NO;
-    }
-
   /* This is a workaround: when the application is unhidden, a
      top-level window may become a (bogus) key window when one of its
      descendants is a (real) key window.  This is problematic because
@@ -4476,10 +4475,10 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 {
   EmacsWindow *window = FRAME_MAC_WINDOW_OBJECT (f);
 
-  if ([NSApp isHidden])
-    window.needsOrderFrontOnUnhide = YES;
-  else
-    mac_within_app (^{
+  mac_within_app (^{
+	if ([NSApp isHidden])
+	  [NSApp unhide:nil];
+
 	struct frame *p = FRAME_PARENT_FRAME (f);
 
 	if (p)
@@ -4546,7 +4545,10 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 	      }
 
 	    if (activate_p)
-	      [window makeKeyAndOrderFront:nil];
+	      {
+		mac_ensure_app_activated ();
+		[window makeKeyAndOrderFront:nil];
+	      }
 	    else
 	      [window orderFront:nil];
 
@@ -4606,7 +4608,6 @@ mac_hide_frame_window (struct frame *f)
       /* Mac OS X 10.6 needs this.  */
       [window.parentWindow removeChildWindow:window];
       [window orderOut:nil];
-      [window setNeedsOrderFrontOnUnhide:NO];
     });
 }
 
@@ -4648,7 +4649,10 @@ mac_activate_frame_window (struct frame *f)
 {
   NSWindow *window = FRAME_MAC_WINDOW_OBJECT (f);
 
-  mac_within_gui (^{[window makeKeyWindow];});
+  mac_within_gui (^{
+      mac_ensure_app_activated ();
+      [window makeKeyWindow];
+    });
 }
 
 static NSRect
