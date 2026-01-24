@@ -22,6 +22,7 @@ along with GNU Emacs Mac port.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #include "macterm.h"
 
+#include <AppKit/AppKit.h>
 #include <sys/socket.h>
 
 #include "character.h"
@@ -2585,7 +2586,12 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
 
   if (!FRAME_TOOLTIP_P (f))
     {
-      if (!self.shouldBeTitled)
+      if (FRAME_UNDECORATED_ROUND (f))
+	windowStyle = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+		       | NSWindowStyleMaskMiniaturizable
+		       | NSWindowStyleMaskResizable
+		       | NSWindowStyleMaskFullSizeContentView);
+      else if (!self.shouldBeTitled)
 	windowStyle = (NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable);
       else
 	windowStyle = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
@@ -2726,6 +2732,14 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
       [window setIgnoresMouseEvents:YES];
       [window setExcludedFromWindowsMenu:YES];
       window.animationBehavior = NSWindowAnimationBehaviorNone;
+    }
+  if (FRAME_UNDECORATED_ROUND (f))
+    {
+      [window setTitlebarAppearsTransparent:YES];
+      [window setTitleVisibility:NSWindowTitleHidden];
+      [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
+      [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
+      [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
     }
 }
 
@@ -4295,11 +4309,12 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
 
 - (void)updateWindowStyle
 {
-  BOOL shouldBeTitled = self.shouldBeTitled;
+  struct frame *f = emacsFrame;
+  BOOL shouldBeTitled = self.shouldBeTitled || FRAME_UNDECORATED_ROUND (f);
+  BOOL needsSetupWindow = NO;
 
   if (emacsWindow.hasTitleBar != shouldBeTitled)
     {
-      struct frame *f = emacsFrame;
       Lisp_Object tool_bar_lines = get_frame_param (f, Qtool_bar_lines);
 
       if (FIXNUMP (tool_bar_lines) && XFIXNUM (tool_bar_lines) > 0)
@@ -4307,14 +4322,21 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
 	    gui_set_frame_parameters (f, list1 (Fcons (Qtool_bar_lines,
 						       make_fixnum (0))));
 	  });
-      FRAME_INTERNAL_TOOL_BAR_P (f) = !shouldBeTitled;
+      FRAME_INTERNAL_TOOL_BAR_P (f) = FRAME_UNDECORATED (f) || FRAME_UNDECORATED_ROUND (f);
       if (FIXNUMP (tool_bar_lines) && XFIXNUM (tool_bar_lines) > 0)
 	mac_within_lisp (^{
 	    gui_set_frame_parameters (f, list1 (Fcons (Qtool_bar_lines,
 						       tool_bar_lines)));
 	  });
-      [self setupWindow];
+      needsSetupWindow = YES;
     }
+
+  if ((([emacsWindow styleMask] & NSWindowStyleMaskFullSizeContentView) != 0)
+      != FRAME_UNDECORATED_ROUND (f))
+    needsSetupWindow = YES;
+
+  if (needsSetupWindow)
+    [self setupWindow];
 
   emacsWindow.hasShadow = self.shouldHaveShadow;
 }

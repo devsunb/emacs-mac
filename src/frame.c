@@ -1195,6 +1195,7 @@ make_frame (bool mini_p)
   f->horizontal_scroll_bars = false;
   f->want_fullscreen = FULLSCREEN_NONE;
   f->undecorated = false;
+  f->undecorated_round = false;
 #ifndef HAVE_NTGUI
   f->override_redirect = false;
 #endif
@@ -4819,6 +4820,7 @@ static const struct frame_parm_table frame_parms[] =
   {"tool-bar-position",		SYMBOL_INDEX (Qtool_bar_position)},
   {"inhibit-double-buffering",  SYMBOL_INDEX (Qinhibit_double_buffering)},
   {"undecorated",		SYMBOL_INDEX (Qundecorated)},
+  {"undecorated-round",		SYMBOL_INDEX (Qundecorated_round)},
   {"parent-frame",		SYMBOL_INDEX (Qparent_frame)},
   {"skip-taskbar",		SYMBOL_INDEX (Qskip_taskbar)},
   {"no-focus-on-map",		SYMBOL_INDEX (Qno_focus_on_map)},
@@ -7148,6 +7150,7 @@ syms_of_frame (void)
   DEFSYM (Qicon, "icon");
   DEFSYM (Qminibuffer, "minibuffer");
   DEFSYM (Qundecorated, "undecorated");
+  DEFSYM (Qundecorated_round, "undecorated-round");
   DEFSYM (Qno_special_glyphs, "no-special-glyphs");
   DEFSYM (Qparent_frame, "parent-frame");
   DEFSYM (Qskip_taskbar, "skip-taskbar");
