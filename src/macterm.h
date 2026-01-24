@@ -260,6 +260,9 @@ struct mac_output
      frame.  */
   bool_bf synthetic_bold_workaround_disabled_p : 1;
 
+  /* True if this is an undecorated frame with round corners.  */
+  bool_bf undecorated_round : 1;
+
   /* Backing scale factor (1 or 2), used for rendering images.  */
   unsigned backing_scale_factor : 2;
 
@@ -326,6 +329,7 @@ struct mac_output
 #define FRAME_CHECK_FULLSCREEN_NEEDED_P(f) \
   ((f)->output_data.mac->check_fullscreen_needed_p)
 #define FRAME_INTERNAL_TOOL_BAR_P(f) ((f)->output_data.mac->internal_tool_bar_p)
+#define FRAME_UNDECORATED_ROUND(f) ((f)->output_data.mac->undecorated_round)
 #define FRAME_BACKGROUND_ALPHA_ENABLED_P(f) \
   ((f)->output_data.mac->background_alpha_enabled_p)
 #define FRAME_SYNTHETIC_BOLD_WORKAROUND_DISABLED_P(f) \

@@ -4901,6 +4901,7 @@ static const struct frame_parm_table frame_parms[] =
 #endif
 #ifdef HAVE_MACGUI
   {"mac-transparent-titlebar",  SYMBOL_INDEX (Qmac_transparent_titlebar)},
+  {"undecorated-round",		SYMBOL_INDEX (Qundecorated_round)},
 #endif
 };
 
@@ -7349,6 +7350,7 @@ syms_of_frame (void)
 #endif
 #ifdef HAVE_MACGUI
   DEFSYM (Qmac_transparent_titlebar, "mac-transparent-titlebar");
+  DEFSYM (Qundecorated_round, "undecorated-round");
 #endif
 
   DEFSYM (Qalpha, "alpha");
