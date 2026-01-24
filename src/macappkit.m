@@ -2285,7 +2285,23 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
   if ([event type] == NSEventTypeLeftMouseDown)
     {
       if (setupResizeTrackingSuspended)
+	/* The synthetic press from -resumeResizeTracking inherits the
+	   resumed drag's modifiers; keep it out of the gesture below.  */
 	setupResizeTrackingSuspended = NO;
+      /* Non-movable windows lose the window server's drag-anywhere
+	 gesture, so perform it here.  */
+      else if (!self.movable
+	       && ([event modifierFlags] & (NSEventModifierFlagControl
+					    | NSEventModifierFlagCommand))
+		  == (NSEventModifierFlagControl | NSEventModifierFlagCommand)
+	       && [self respondsToSelector:@selector(performWindowDragWithEvent:)])
+	{
+	  self.movable = YES;
+	  [self performWindowDragWithEvent:event];
+	  self.movable = NO;
+
+	  return;
+	}
       else
 	[self setupResizeTracking:event];
     }
@@ -2665,10 +2681,17 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
   NSRect contentRect;
   NSWindowStyleMask windowStyle;
   EmacsWindow *window;
+  BOOL usesUndecoratedRound = (FRAME_UNDECORATED_ROUND (f)
+			       && self.shouldBeTitled);
 
   if (!FRAME_TOOLTIP_P (f))
     {
-      if (!self.shouldBeTitled)
+      if (usesUndecoratedRound)
+	windowStyle = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+		       | NSWindowStyleMaskMiniaturizable
+		       | NSWindowStyleMaskResizable
+		       | NSWindowStyleMaskFullSizeContentView);
+      else if (!self.shouldBeTitled)
 	windowStyle = (NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable);
       else
 	windowStyle = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
@@ -2809,6 +2832,23 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
       [window setIgnoresMouseEvents:YES];
       [window setExcludedFromWindowsMenu:YES];
       window.animationBehavior = NSWindowAnimationBehaviorNone;
+    }
+  if (usesUndecoratedRound)
+    {
+      if ([window respondsToSelector:@selector(setTitlebarAppearsTransparent:)])
+	[window setTitlebarAppearsTransparent:YES];
+      if ([window respondsToSelector:@selector(setTitleVisibility:)])
+	[window setTitleVisibility:NSWindowTitleHidden];
+      [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
+      [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
+      [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
+      if ([window respondsToSelector:@selector(setTabbingMode:)])
+	window.tabbingMode = NSWindowTabbingModeDisallowed;
+
+      /* Clearing `movable' takes the top rows back from the window
+	 server's title-bar drag strip; -[EmacsWindow sendEvent:]
+	 performs the drag gesture this gives up.  */
+      window.movable = NO;
     }
 }
 
@@ -4383,11 +4423,18 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
 
 - (void)updateWindowStyle
 {
+  struct frame *f = emacsFrame;
+  BOOL wantsUndecoratedRound = FRAME_UNDECORATED_ROUND (f);
+  BOOL usesUndecoratedRound = (wantsUndecoratedRound
+			       && self.shouldBeTitled);
   BOOL shouldBeTitled = self.shouldBeTitled;
+  BOOL needsSetupWindow = NO;
+  BOOL needsInternalToolBar = (!self.shouldBeTitled
+			       || wantsUndecoratedRound);
 
-  if (emacsWindow.hasTitleBar != shouldBeTitled)
+  if (emacsWindow.hasTitleBar != shouldBeTitled
+      || FRAME_INTERNAL_TOOL_BAR_P (f) != needsInternalToolBar)
     {
-      struct frame *f = emacsFrame;
       Lisp_Object tool_bar_lines = get_frame_param (f, Qtool_bar_lines);
 
       if (FIXNUMP (tool_bar_lines) && XFIXNUM (tool_bar_lines) > 0)
@@ -4395,14 +4442,21 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
 	    gui_set_frame_parameters (f, list1 (Fcons (Qtool_bar_lines,
 						       make_fixnum (0))));
 	  });
-      FRAME_INTERNAL_TOOL_BAR_P (f) = !shouldBeTitled;
+      FRAME_INTERNAL_TOOL_BAR_P (f) = needsInternalToolBar;
       if (FIXNUMP (tool_bar_lines) && XFIXNUM (tool_bar_lines) > 0)
 	mac_within_lisp (^{
 	    gui_set_frame_parameters (f, list1 (Fcons (Qtool_bar_lines,
 						       tool_bar_lines)));
 	  });
-      [self setupWindow];
+      needsSetupWindow = YES;
     }
+
+  if ((([emacsWindow styleMask] & NSWindowStyleMaskFullSizeContentView) != 0)
+      != usesUndecoratedRound)
+    needsSetupWindow = YES;
+
+  if (needsSetupWindow)
+    [self setupWindow];
 
   emacsWindow.hasShadow = self.shouldHaveShadow;
 }
@@ -4536,6 +4590,7 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 	else
 	  {
 	    NSWindowTabbingMode tabbingMode = NSWindowTabbingModeAutomatic;
+	    NSWindowTabbingMode mainWindowTabbingMode = NSWindowTabbingModeAutomatic;
 	    NSWindow *mainWindow = [NSApp mainWindow];
 	    if ([mainWindow respondsToSelector:@selector(tabGroup)]
 		&& mainWindow.tabGroup
@@ -4543,10 +4598,13 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 	      mainWindow = mainWindow.tabGroup.selectedWindow;
 
 	    if (!FRAME_TOOLTIP_P (f)
+		&& !FRAME_UNDECORATED_ROUND (f)
 		&& [window respondsToSelector:@selector(setTabbingMode:)]
 		&& !window.isVisible)
 	      {
-		if (!mainWindow.hasTitleBar || NILP (Vmac_frame_tabbing))
+		if (!mainWindow.hasTitleBar
+		    || mainWindow.tabbingMode == NSWindowTabbingModeDisallowed
+		    || NILP (Vmac_frame_tabbing))
 		  tabbingMode = NSWindowTabbingModeDisallowed;
 		else if (EQ (Vmac_frame_tabbing, Qt))
 		  tabbingMode = NSWindowTabbingModePreferred;
@@ -4570,6 +4628,9 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 		window.tabbingMode = tabbingMode;
 		if ([mainWindow isKindOfClass:EmacsWindow.class])
 		  {
+		    /* Restored below: a rounded main window keeps
+		       tabbing disallowed permanently.  */
+		    mainWindowTabbingMode = mainWindow.tabbingMode;
 		    mainWindow.tabbingMode = tabbingMode;
 		    /* If the Tab Overview UI is visible and the window
 		       is to join its tab group, then make the Overview
@@ -4591,7 +4652,7 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 	      {
 		window.tabbingMode = NSWindowTabbingModeAutomatic;
 		if ([mainWindow isKindOfClass:EmacsWindow.class])
-		  mainWindow.tabbingMode = NSWindowTabbingModeAutomatic;
+		  mainWindow.tabbingMode = mainWindowTabbingMode;
 	      }
 	  }
       });
