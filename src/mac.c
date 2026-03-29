@@ -3015,18 +3015,15 @@ init_mac_osx_environment (void)
   /* Initialize locale related variables.  */
   mac_system_script_code = mac_get_system_script_code ();
 
-  if (IS_DAEMON)
-    inhibit_window_system = 1;
-  else
-    {
-      CFDictionaryRef session_dict = CGSessionCopyCurrentDictionary ();
+  {
+    CFDictionaryRef session_dict = CGSessionCopyCurrentDictionary ();
 
-      if (session_dict == NULL)
-	/* No window server session.  */
-	inhibit_window_system = 1;
-      else
-	CFRelease (session_dict);
-    }
+    if (session_dict == NULL)
+      /* No window server session.  */
+      inhibit_window_system = 1;
+    else
+      CFRelease (session_dict);
+  }
 
   /* macOS doesn't set any environment variables for the locale when
      run from the GUI. Get the locale from the OS and set LANG. */

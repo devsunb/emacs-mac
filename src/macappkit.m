@@ -1029,6 +1029,17 @@ mac_ensure_app_activated (void)
     [NSRunningApplication.currentApplication activateWithOptions:options];
 }
 
+static BOOL applicationHiddenExplicitly, activationPolicyHidePending;
+
+void
+mac_set_activation_policy_prohibited (void)
+{
+  mac_within_gui (^{
+      activationPolicyHidePending = ![NSApp isHidden];
+      [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+    });
+}
+
 /* Move FILENAME to the trash without using the Finder and return
    whether it succeeded.  If CFERROR is non-NULL, *CFERROR is set on
    failure.  If trashing functionality is not available, return false
@@ -1239,6 +1250,27 @@ static bool handling_queued_nsevents_p;
   init_apple_event_handler ();
   init_accessibility ();
   observedKeyPaths = [[NSSet alloc] init];
+}
+
+- (void)applicationWillHide:(NSNotification *)notification
+{
+  if (!activationPolicyHidePending)
+    applicationHiddenExplicitly = YES;
+}
+
+- (void)applicationDidHide:(NSNotification *)notification
+{
+  if (activationPolicyHidePending)
+    {
+      activationPolicyHidePending = NO;
+      if (NSApp.activationPolicy != NSApplicationActivationPolicyProhibited)
+	[NSApp unhide:nil];
+    }
+}
+
+- (void)applicationDidUnhide:(NSNotification *)notification
+{
+  applicationHiddenExplicitly = NO;
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
@@ -2041,7 +2073,9 @@ mac_application_state (void)
   if (NSApp == nil)
     return result;
 
-  result = Fcons (QChidden_p, Fcons ([NSApp isHidden] ? Qt : Qnil, result));
+  result = Fcons (QChidden_p,
+		  Fcons ((applicationHiddenExplicitly && [NSApp isHidden])
+			 ? Qt : Qnil, result));
   result = Fcons (QCactive_p, Fcons ([NSApp isActive] ? Qt : Qnil, result));
   if ([NSApp respondsToSelector:@selector(effectiveAppearance)])
     result = Fcons (QCappearance,
@@ -4454,7 +4488,7 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 
   mac_within_app (^{
 	mac_ensure_app_activation_policy ();
-	if ([NSApp isHidden])
+	if (applicationHiddenExplicitly && [NSApp isHidden])
 	  {
 	    if (activate_p)
 	      [NSApp unhide:nil];
@@ -10953,7 +10987,9 @@ static NSString *localizedMenuTitleForEdit, *localizedMenuTitleForHelp, *localiz
     return YES;
 
   window = [NSApp keyWindow];
-  if (window == nil)
+  /* The selected frame is not a Mac frame in a daemon before its
+     first GUI frame.  */
+  if (window == nil && FRAME_MAC_P (SELECTED_FRAME ()))
     window = FRAME_MAC_WINDOW_OBJECT (SELECTED_FRAME ());
   firstResponder = [window firstResponder];
   if ([firstResponder isMemberOfClass:EmacsMainView.class])

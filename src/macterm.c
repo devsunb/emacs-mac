@@ -4438,8 +4438,20 @@ static void
 mac_destroy_window (struct frame *f)
 {
   struct mac_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);
+  struct terminal *terminal = FRAME_TERMINAL (f);
+  bool suspend_p = terminal->name && dpyinfo->reference_count == 1;
+
+  /* Keep one synthetic terminal reference after the last frame's
+     reference is removed by delete_frame, so the terminal stays
+     available for new frames.  Do not destroy the display's bitmaps
+     here; the terminal keeps using them until mac_delete_terminal.  */
+  if (suspend_p && terminal->reference_count == dpyinfo->reference_count)
+    terminal->reference_count++;
 
   mac_free_frame_resources (f);
+
+  if (suspend_p)
+    mac_set_activation_policy_prohibited ();
 
   dpyinfo->reference_count--;
 }
@@ -5780,6 +5792,12 @@ mac_delete_terminal (struct terminal *terminal)
     return;
 
   block_input ();
+
+  /* Drop the synthetic reference retained after the last frame was
+     deleted.  */
+  if (terminal->reference_count > dpyinfo->reference_count)
+    terminal->reference_count--;
+
   image_destroy_all_bitmaps (dpyinfo);
 
   /* No more input on this descriptor.  */
