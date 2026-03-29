@@ -614,6 +614,7 @@ extern void mac_alert_sound_play (void);
 extern double mac_appkit_version (void);
 extern double mac_system_uptime (void);
 extern bool mac_is_current_process_frontmost (void);
+extern void mac_set_activation_policy_prohibited (void);
 extern bool mac_trash_file (const char *, CFErrorRef *);
 extern CFStringRef mac_uti_create_with_mime_type (CFStringRef);
 extern CFStringRef mac_uti_create_with_filename_extension (CFStringRef);

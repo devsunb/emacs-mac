@@ -3394,6 +3394,35 @@ mac_display_info_for_name (Lisp_Object name)
 }
 
 
+DEFUN ("mac--window-server-available-p", Fmac__window_server_available_p,
+       Smac__window_server_available_p, 0, 0, 0,
+       doc: /* Return non-nil if a window server session is available.  */)
+  (void)
+{
+  CFDictionaryRef session_dict;
+
+  block_input ();
+  session_dict = CGSessionCopyCurrentDictionary ();
+  if (session_dict)
+    CFRelease (session_dict);
+  unblock_input ();
+
+  return session_dict ? Qt : Qnil;
+}
+
+DEFUN ("mac--set-activation-policy-prohibited",
+       Fmac__set_activation_policy_prohibited,
+       Smac__set_activation_policy_prohibited, 0, 0, 0,
+       doc: /* Hide the application from the Dock and the app switcher.  */)
+  (void)
+{
+  block_input ();
+  mac_set_activation_policy_prohibited ();
+  unblock_input ();
+
+  return Qnil;
+}
+
 DEFUN ("x-open-connection", Fx_open_connection, Sx_open_connection,
        1, 3, 0, doc: /* SKIP: real doc in xfns.c.  */)
   (Lisp_Object display, Lisp_Object xrm_string, Lisp_Object must_succeed)
@@ -5495,6 +5524,8 @@ respectively.  */);
   defsubr (&Smac_mouse_absolute_pixel_position);
   defsubr (&Smac_set_mouse_absolute_pixel_position);
   defsubr (&Sx_create_frame);
+  defsubr (&Smac__window_server_available_p);
+  defsubr (&Smac__set_activation_policy_prohibited);
   defsubr (&Sx_open_connection);
   defsubr (&Sx_close_connection);
   defsubr (&Sx_display_list);

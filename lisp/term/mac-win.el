@@ -876,8 +876,9 @@ for the key symbol `apple-event' so it can be inspected later."
 
 (defun mac-ae-reopen-application (_event)
   "Show some frame in response to the Apple event EVENT.
-The frame to be shown is chosen from visible or iconified frames
-if possible.  If there's no such frame, a new frame is created."
+The frame to be shown is the frontmost fully visible top-level frame
+if there is one, otherwise any visible or iconified frame.  If there's
+no such frame, a new frame is created."
   (interactive "e")
   ;; OS X 10.10 sometimes makes hidden frames visible after the call
   ;; to this function.
@@ -886,17 +887,55 @@ if possible.  If there's no such frame, a new frame is created."
 		(plist-get (mac-application-state) :hidden-p))
       (sit-for 0.017)
       (setq count (1- count))))
-  (unless (frame-visible-p (selected-frame))
-    (let ((frame (or (car (visible-frame-list))
-		     (car (filtered-frame-list 'frame-visible-p)))))
-      (if frame
-	  (select-frame frame)
-	(switch-to-buffer-other-frame "*scratch*"))))
-  (select-frame-set-input-focus (selected-frame)))
+  ;; The frontmost window may belong to a frame being deleted, a
+  ;; minimized frame, or a child frame; prefer a fully visible top-level one.
+  (let ((frame (or (seq-find (lambda (f) (and (eq (frame-visible-p f) t)
+					      (null (frame-parent f))))
+			     (mac-frame-list-z-order))
+		   (car (filtered-frame-list
+			 (lambda (f)
+			   (and (eq (framep f) 'mac)
+				(frame-visible-p f))))))))
+    (cond
+     (frame
+      (select-frame-set-input-focus frame))
+     ((daemonp)
+      (select-frame-set-input-focus
+       (make-frame `((window-system . mac)
+		     (client . nowait)))))
+     (t
+      (switch-to-buffer-other-frame "*scratch*")
+      (select-frame-set-input-focus (selected-frame))))))
+
+(defun mac-ae-select-frame-for-open ()
+  "Select a usable Mac frame for a daemon Apple event."
+  (when (daemonp)
+    (let ((usable-p (lambda (f)
+		      (and (eq (framep f) 'mac)
+			   (null (frame-parent f))
+			   ;; `icon' means minimized; do not open into it.
+			   (eq (frame-visible-p f) t))))
+	  (frame (selected-frame)))
+      (unless (funcall usable-p frame)
+	(setq frame
+	      (or (car (filtered-frame-list usable-p))
+		  (let ((iconified
+			 (car (filtered-frame-list
+			       (lambda (f)
+				 (and (eq (framep f) 'mac)
+				      (null (frame-parent f))
+				      (eq (frame-visible-p f) 'icon)))))))
+		    (when iconified
+		      (make-frame-visible iconified)
+		      iconified))
+		  (make-frame `((window-system . mac)
+				(client . nowait))))))
+      (select-frame frame))))
 
 (defun mac-ae-open-documents (event)
   "Open the documents specified by the Apple event EVENT."
   (interactive "e")
+  (mac-ae-select-frame-for-open)
   (let ((ae (mac-event-ae event)))
     (dolist (filename (mac-ae-list ae nil 'undecoded-file-name))
       (when filename
@@ -1088,6 +1127,7 @@ through this without \"emulated closures\".  For example,
   "Open the URL specified by the Apple event EVENT.
 Currently the `mailto' and `org-protocol' schemes are supported."
   (interactive "e")
+  (mac-ae-select-frame-for-open)
   (let* ((ae (mac-event-ae event))
 	 (url (mac-ae-text ae)))
     (cond ((string-match "\\`mailto:" url)
@@ -3085,10 +3125,7 @@ standard ones in `x-handle-args'."
 				(eq (frame-visible-p (selected-frame)) t))
 			   (x-focus-frame (selected-frame)))))
 
-  (add-hook 'after-init-hook
-	    (lambda ()
-	      (mouse-wheel-mode 0)
-	      (mac-mouse-wheel-mode 1)))
+  (add-hook 'after-init-hook #'mac-setup-mouse-wheel)
 
   (add-hook 'menu-bar-update-hook 'mac-setup-help-topics)
   (run-with-idle-timer 0.1 nil 'mac-setup-help-topics)
@@ -3157,7 +3194,6 @@ standard ones in `x-handle-args'."
   (overlay-put mac-ts-active-input-overlay 'display "")
 
   (x-apply-session-resources)
-  (add-to-list 'display-format-alist '("\\`Mac\\'" . mac))
   (setq mac-initialized t))
 
 (declare-function mac-own-selection-internal "macselect.c"
@@ -3170,6 +3206,141 @@ standard ones in `x-handle-args'."
 		  (&optional selection terminal))
 (declare-function mac-get-selection-internal "macselect.c"
 		  (selection-symbol target-type &optional time-stamp terminal))
+
+(defun mac-setup-mouse-wheel ()
+  "Enable Mac mouse wheel support."
+  (mouse-wheel-mode 0)
+  (mac-mouse-wheel-mode 1))
+
+(defcustom mac-daemon-warm-up t
+  "If non-nil, the daemon pre-creates and discards its first GUI frame.
+This pays the one-time costs of the first frame so a frame later created
+from the Dock or Spotlight appears without visible lag."
+  :group 'mac
+  :type 'boolean)
+
+(defun mac-daemon-warm-up-first-frame ()
+  "Pay the one-time costs of the process's first GUI frame in advance."
+  ;; mac_set_frame_alpha clamps alpha to `frame-alpha-lower-limit', so
+  ;; bind it to 0 around `make-frame'.
+  (let ((frame-alpha-lower-limit 0)
+	(frame nil)
+	capture-frame)
+    (setq capture-frame
+	  (lambda (new-frame)
+	    ;; Record the frame before user hooks run inside `make-frame'
+	    ;; so cleanup can delete it if one signals.
+	    (unless frame
+	      (setq frame new-frame))))
+    (unwind-protect
+	(progn
+	  (unwind-protect
+	      (progn
+		(add-hook 'after-make-frame-functions capture-frame -100)
+		(setq frame
+		      (make-frame '((window-system . mac)
+				    (alpha . 0)))))
+	    (remove-hook 'after-make-frame-functions capture-frame))
+	  ;; A user hook may have changed the requested alpha.
+	  (set-frame-parameter frame 'alpha 0)
+	  ;; Redisplay skips entirely unless the frame is selected.
+	  (select-frame frame)
+	  (redisplay))
+      (when (frame-live-p frame)
+	(unwind-protect
+	    (set-frame-parameter frame 'alpha 0)
+	  (delete-frame frame t))))))
+
+(declare-function mac--window-server-available-p "macfns.c" ())
+(declare-function mac--set-activation-policy-prohibited "macfns.c" ())
+
+(defun mac-daemon-hide-dock-icon ()
+  "Hide the daemon's Dock icon unless a GUI frame is already visible."
+  (unless (filtered-frame-list (lambda (f)
+				 (and (eq (framep f) 'mac)
+				      (frame-visible-p f))))
+    (if mac-daemon-warm-up
+	(mac-daemon-warm-up-first-frame)
+      (mac--set-activation-policy-prohibited))))
+
+(defun mac-daemon-initialize-window-system ()
+  "Initialize the Mac window system in daemon mode.
+This lets the application create GUI frames when activated from the
+Dock or Spotlight."
+  (when (and (daemonp) (not (get 'mac 'window-system-initialized)))
+    (if (not (mac--window-server-available-p))
+	(progn
+	  ;; Connecting without a session would abort the process, and
+	  ;; emacsclient -c would connect through
+	  ;; `window-system-for-display' unless "Mac" stops resolving.
+	  (setq display-format-alist
+		(rassq-delete-all 'mac display-format-alist))
+	  (message "Mac window system initialization skipped: %s"
+		   "no window server session; GUI frames are unavailable"))
+      (condition-case err
+	  (progn
+	    (let ((window-system 'mac))
+	      (window-system-initialization))
+	    (put 'mac 'window-system-initialized t)
+	    (mac-setup-mouse-wheel)
+	    ;; window-system-initialization adds this to
+	    ;; after-init-hook, but that hook has already run.
+	    (mac-process-deferred-apple-events)
+	    (run-with-idle-timer 0 nil #'mac-daemon-hide-dock-icon))
+	(error
+	 (message "Mac window system initialization failed: %s"
+		  (error-message-string err)))))))
+;; Run before hook functions the user's init adds at the default depth.
+(add-hook 'emacs-startup-hook #'mac-daemon-initialize-window-system -90)
+
+(defvar mac-minibuffer-deleted-frames nil
+  "Alist of Mac frames whose deleted minibuffer should be aborted.
+Each element has the form (FRAME . TOKEN).")
+
+(defun mac-abort-minibuffer-on-deleted-frame (frame)
+  "Record FRAME if its deletion would strand the active minibuffer.
+Do nothing unless FRAME is a Mac frame hosting the active minibuffer.
+Meant for `delete-frame-functions'."
+  (when (and (eq (framep frame) 'mac)
+	     (let ((window (active-minibuffer-window)))
+	       (and window (eq (window-frame window) frame))))
+    (let ((token (list nil)))
+      (setq mac-minibuffer-deleted-frames
+	    (assq-delete-all frame mac-minibuffer-deleted-frames))
+      (push (cons frame token) mac-minibuffer-deleted-frames)
+      ;; If `delete-frame' is abandoned after `delete-frame-functions',
+      ;; remove the pending state once control returns to the command loop.
+      (run-at-time 0 nil
+		   (lambda ()
+		     (let ((entry
+			    (assq frame mac-minibuffer-deleted-frames)))
+		       (when (and entry
+				  (eq (cdr entry) token)
+				  (frame-live-p frame))
+			 (setq mac-minibuffer-deleted-frames
+			       (assq-delete-all
+				frame mac-minibuffer-deleted-frames)))))))))
+(add-hook 'delete-frame-functions #'mac-abort-minibuffer-on-deleted-frame)
+
+(defun mac-abort-minibuffer-after-delete-frame (frame)
+  "Return to the top level if FRAME's deletion stranded its minibuffer.
+Clear the record made for FRAME by `mac-abort-minibuffer-on-deleted-frame'
+and, when no visible or iconified Mac frame remains to host the
+minibuffer, return to the top level.
+Meant for `after-delete-frame-functions'."
+  (let ((entry (assq frame mac-minibuffer-deleted-frames)))
+    (when entry
+      (setq mac-minibuffer-deleted-frames
+	    (assq-delete-all frame mac-minibuffer-deleted-frames))
+      (unless (seq-some (lambda (f)
+			  (and (eq (framep f) 'mac)
+			       (frame-visible-p f)))
+			(frame-list))
+	(run-at-time 0 nil #'top-level)))))
+(add-hook 'after-delete-frame-functions
+	  #'mac-abort-minibuffer-after-delete-frame)
+
+(add-to-list 'display-format-alist '("\\`Mac\\'" . mac))
 
 (cl-defmethod handle-args-function (args &context (window-system mac))
   (mac-handle-args args))
