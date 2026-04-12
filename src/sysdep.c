@@ -2776,6 +2776,42 @@ emacs_intr_read (int fd, void *buf, ptrdiff_t nbyte, bool interruptible)
     }
   while (result < 0 && errno == EINTR);
 
+#ifdef DARWIN_OS
+  /* macOS caps a tty/pty read at 1024 bytes.  After a full read keep
+     draining while pselect reports data, within the caps below.
+     INTERRUPTIBLE is not honored here, and errno may be left set on a
+     successful return; callers read it only after a negative return.  */
+  if (result == 1024 && nbyte > result && fd < FD_SETSIZE && isatty (fd))
+    {
+      /* Cap the drain: the caller may hold the global lock.  The byte
+	 cap does not bound a trickling writer, so cap the reads too.  */
+      ptrdiff_t drain_max = min (nbyte, 64 * 1024);
+      int reads_left = 64;
+      ssize_t n;
+      fd_set readfds;
+      /* pselect does not modify its timeout, unlike select.  */
+      const struct timespec timeout = { .tv_sec = 0, .tv_nsec = 25000 };
+
+      do
+	{
+	  FD_ZERO (&readfds);
+	  FD_SET (fd, &readfds);
+	  /* A signal (EINTR) ends the drain like a lull would.  */
+	  if (pselect (fd + 1, &readfds, NULL, NULL, &timeout, NULL) <= 0)
+	    break;
+
+	  n = read (fd, (char *) buf + result, drain_max - result);
+	  if (n > 0)
+	    result += n;
+	  else if (n < 0 && errno == EINTR)
+	    continue;
+	  else
+	    break;
+	}
+      while (result < drain_max && --reads_left > 0);
+    }
+#endif
+
   return result;
 }
 
