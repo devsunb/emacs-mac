@@ -349,6 +349,14 @@ struct window
     /* This is handy for undrawing the cursor.  */
     int phys_cursor_ascent, phys_cursor_height;
 
+#ifdef HAVE_MACGUI
+    /* Face id `default' is remapped to in this window's buffer,
+       resolved on the Lisp thread (mac_update_window_begin) for the
+       cursor code that also runs on the GUI thread.  DEFAULT_FACE_ID
+       (zero) means no remapping.  */
+    int cursor_default_face_id;
+#endif
+
 #endif /* HAVE_WINDOW_SYSTEM */
 
     /* Width of left and right fringes, in pixels.

@@ -690,6 +690,21 @@ mac_update_begin (struct frame *f)
 static void
 mac_update_window_begin (struct window *w)
 {
+  /* Resolve the remapped default face on the Lisp thread with the
+     window's buffer current: mac_set_cursor_gc also runs on the GUI
+     thread.  Before being_updated_p is set, so a non-local exit
+     cannot leave it set.  Pseudo windows have no buffer.  */
+  if (mac_reverse_video_cursor && !w->pseudo_window_p)
+    {
+      specpdl_ref count = SPECPDL_INDEX ();
+
+      record_unwind_current_buffer ();
+      set_buffer_internal_1 (XBUFFER (w->contents));
+      w->cursor_default_face_id =
+	lookup_basic_face (w, XFRAME (WINDOW_FRAME (w)), DEFAULT_FACE_ID);
+      unbind_to (count, Qnil);
+    }
+
   w->being_updated_p = true;
 }
 
@@ -1018,34 +1033,54 @@ static void mac_check_font (struct frame *, struct font *);
 static void
 mac_set_cursor_gc (struct glyph_string *s)
 {
-  if (s->font == FRAME_FONT (s->f)
+  /* Resolved in mac_update_window_begin; no Lisp here, this also runs
+     on the GUI thread.  */
+  int default_face_id =
+    mac_reverse_video_cursor ? s->w->cursor_default_face_id : DEFAULT_FACE_ID;
+
+  if ((!mac_reverse_video_cursor
+       || s->face->ascii_face->id == default_face_id)
+      && s->font == FRAME_FONT (s->f)
       && s->face->background == FRAME_BACKGROUND_PIXEL (s->f)
       && s->face->foreground == FRAME_FOREGROUND_PIXEL (s->f)
       && !s->cmp)
     s->gc = s->f->output_data.mac->cursor_gc;
   else
     {
-      /* Cursor on non-default face: must merge.  */
+      /* The precomputed cursor GC cannot be used: must merge.  */
       XGCValues xgcv;
       unsigned long mask;
 
-      xgcv.background = s->f->output_data.mac->cursor_pixel;
-      xgcv.foreground = s->face->background;
-
-      /* If the glyph would be invisible, try a different foreground.  */
-      if (xgcv.foreground == xgcv.background)
-	xgcv.foreground = s->face->foreground;
-      if (xgcv.foreground == xgcv.background)
-	xgcv.foreground = s->f->output_data.mac->cursor_foreground_pixel;
-      if (xgcv.foreground == xgcv.background)
-	xgcv.foreground = s->face->foreground;
-
-      /* Make sure the cursor is distinct from text in this face.  */
-      if (xgcv.background == s->face->background
-	  && xgcv.foreground == s->face->foreground)
+      if (mac_reverse_video_cursor
+	  && s->face->ascii_face->id != default_face_id
+	  && s->face->foreground != s->face->background)
 	{
+	  /* Reverse video: swap the face's colors.  */
 	  xgcv.background = s->face->foreground;
 	  xgcv.foreground = s->face->background;
+	}
+      else
+	{
+	  /* Default cursor color, also the fallback when the swap would
+	     be invisible.  */
+	  xgcv.background = s->f->output_data.mac->cursor_pixel;
+	  xgcv.foreground = s->face->background;
+
+	  /* If the glyph would be invisible, try a different foreground.  */
+	  if (xgcv.foreground == xgcv.background)
+	    xgcv.foreground = s->face->foreground;
+	  if (xgcv.foreground == xgcv.background)
+	    xgcv.foreground = s->f->output_data.mac->cursor_foreground_pixel;
+	  if (xgcv.foreground == xgcv.background)
+	    xgcv.foreground = s->face->foreground;
+
+	  /* Make sure the cursor is distinct from text in this face.  */
+	  if (xgcv.background == s->face->background
+	      && xgcv.foreground == s->face->foreground)
+	    {
+	      xgcv.background = s->face->foreground;
+	      xgcv.foreground = s->face->background;
+	    }
 	}
 
       IF_DEBUG (mac_check_font (s->f, s->font));
@@ -5982,6 +6017,17 @@ thinner, and larger values thicker. */);
   DEFVAR_BOOL ("mac-ignore-momentum-wheel-events", mac_ignore_momentum_wheel_events,
 	       doc: /* Non-nil means momentum wheel events are ignored.  */);
   mac_ignore_momentum_wheel_events = false;
+
+  DEFVAR_BOOL ("mac-reverse-video-cursor", mac_reverse_video_cursor,
+	       doc: /* Non-nil means the box cursor swaps the colors of the glyph it covers.
+The covered character is drawn with the foreground and background of
+its face swapped, instead of filling the cell with `cursor-color'.
+When the face's foreground and background are identical, so swapping
+would leave the cursor invisible, it falls back to `cursor-color'.
+The default face is unaffected.  It also applies to a bar or hbar
+cursor on an image glyph in a non-selected window, which is drawn as
+a box.  */);
+  mac_reverse_video_cursor = false;
 
 /* Variables to configure modifier key assignment.  */
 
