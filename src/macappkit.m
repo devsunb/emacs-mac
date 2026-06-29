@@ -41,6 +41,21 @@ along with GNU Emacs Mac port.  If not, see <https://www.gnu.org/licenses/>.  */
 #import "macappkit.h"
 #import <objc/runtime.h>
 
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= 120000
+#import <UserNotifications/UserNotifications.h>
+
+API_AVAILABLE (macos (10.14))
+@interface EmacsController (Notifications) <UNUserNotificationCenterDelegate>
+- (void)setUpNotifications;
+- (void)queueNotificationRequest:(UNNotificationRequest *)request;
+- (void)submitNotificationRequest:(UNNotificationRequest *)request;
+- (void)removeQueuedNotificationRequestWithIdentifier:(NSString *)identifier;
+- (void)discardNotificationRequests:
+  (NSArrayOf (UNNotificationRequest *) *)requests;
+- (void)completeNotificationAuthorizationRequest:(BOOL)granted;
+@end
+#endif
+
 #if USE_ARC
 #define MRC_RETAIN(receiver)		((id) (receiver))
 #define MRC_RELEASE(receiver)
@@ -114,6 +129,7 @@ static void mac_within_gui_and_here (void (^) (void),
 static void mac_within_gui_allowing_inner_lisp (void (^) (void));
 static void mac_within_lisp (void (^) (void));
 static void mac_within_lisp_deferred_unless_popup (void (^) (void));
+static void mac_within_lisp_deferred_and_wake (void (^) (void));
 
 static void mac_draw_queue_sync(void);
 
@@ -1295,6 +1311,11 @@ static bool handling_queued_nsevents_p;
 
   [NSApp registerUserInterfaceItemSearchHandler:self];
   Vmac_help_topics = Qnil;
+
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= 120000
+  if (@available (macOS 10.14, *))
+    [self setUpNotifications];
+#endif
 
   /* Initialize spell checker for ispell and jinx enchant-2 using
      AppleSpell.  See https://github.com/minad/jinx/pull/91 */
@@ -16709,6 +16730,409 @@ mac_screen_font_shape (ScreenFontRef screen_font, CFStringRef cf_string,
 
 @end
 
+#if MAC_OS_X_VERSION_MAX_ALLOWED >= 120000
+
+#define MAC_NOTIFICATION_CATEGORY_ID @"org.gnu.Emacs.notification"
+
+enum
+  {
+    MAC_NOTIFICATION_AUTHORIZATION_IDLE,
+    MAC_NOTIFICATION_AUTHORIZATION_PENDING,
+    MAC_NOTIFICATION_AUTHORIZATION_DETERMINED
+  };
+
+/* Requests awaiting the authorization verdict, oldest first so a
+   batch drain preserves posting order.  Bounded below.  */
+static NSMutableArrayOf (UNNotificationRequest *)
+  *mac_pending_notification_requests;
+static NSMutableDictionaryOf (NSString *, UNNotificationRequest *)
+  *mac_submitting_notification_requests;
+static unsigned char mac_notification_authorization_state;
+
+#define MAC_PENDING_NOTIFICATION_LIMIT 256
+
+/* Return the UNNotificationRequest identifier string for the
+   notification numbered ID.  */
+
+static NSString *
+mac_notification_identifier (intmax_t notification_id)
+{
+  return [NSString stringWithFormat:@"emacs-notification-%jd", notification_id];
+}
+
+/* Return the index of the pending request with IDENTIFIER, or
+   NSNotFound.  Main thread only.  */
+
+static NSUInteger API_AVAILABLE (macos (10.14))
+mac_pending_notification_request_index (NSString *identifier)
+{
+  if (mac_pending_notification_requests == nil)
+    return NSNotFound;
+
+  return [mac_pending_notification_requests
+	   indexOfObjectPassingTest:^BOOL(UNNotificationRequest *request,
+					  NSUInteger index, BOOL *stop) {
+      return [request.identifier isEqualToString:identifier];
+    }];
+}
+
+bool
+mac_notifications_available_p (void)
+{
+  if (@available (macOS 10.14, *))
+    /* emacsController is nil until the window system is initialized.  */
+    return (emacsController != nil
+	    && NSBundle.mainBundle.bundleIdentifier != nil);
+
+  return false;
+}
+
+void
+mac_notifications_notify (Lisp_Object title, Lisp_Object body,
+			  Lisp_Object subtitle, Lisp_Object sound,
+			  Lisp_Object group, Lisp_Object urgency,
+			  intmax_t notification_id)
+{
+  if (@available (macOS 10.14, *))
+    {
+      /* These run on the Lisp thread (before mac_within_gui below), so
+	 the encoding done by stringWithLispString: is safe here.  */
+      NSString *titleStr = [NSString stringWithLispString:title];
+      NSString *bodyStr = [NSString stringWithLispString:body];
+      NSString *subtitleStr = (STRINGP (subtitle)
+			       ? [NSString stringWithLispString:subtitle]
+			       : nil);
+      NSString *soundStr = (STRINGP (sound)
+			    ? [NSString stringWithLispString:sound]
+			    : nil);
+      NSString *groupStr = (STRINGP (group)
+			    ? [NSString stringWithLispString:group]
+			    : nil);
+      bool low = EQ (urgency, Qlow);
+      bool critical = EQ (urgency, Qcritical);
+      NSString *identifier = mac_notification_identifier (notification_id);
+
+      mac_within_gui (^{
+	  UNMutableNotificationContent *content =
+	    [[UNMutableNotificationContent alloc] init];
+
+	  content.title = titleStr;
+	  content.body = bodyStr;
+	  if (subtitleStr)
+	    content.subtitle = subtitleStr;
+	  if (soundStr)
+	    content.sound = ([soundStr isEqualToString:@"default"]
+			     ? UNNotificationSound.defaultSound
+			     : [UNNotificationSound soundNamed:soundStr]);
+	  if (groupStr)
+	    content.threadIdentifier = groupStr;
+	  content.categoryIdentifier = MAC_NOTIFICATION_CATEGORY_ID;
+	  content.userInfo = @{@"id" : @(notification_id)};
+	  if (@available (macOS 12.0, *))
+	    content.interruptionLevel =
+	      (critical ? UNNotificationInterruptionLevelTimeSensitive
+	       : (low ? UNNotificationInterruptionLevelPassive
+		  : UNNotificationInterruptionLevelActive));
+
+	  UNNotificationRequest *request =
+	    [UNNotificationRequest requestWithIdentifier:identifier
+						 content:content trigger:nil];
+	  [emacsController queueNotificationRequest:request];
+	  MRC_RELEASE (content);
+	});
+    }
+}
+
+void
+mac_notifications_close (intmax_t notification_id)
+{
+  if (@available (macOS 10.14, *))
+    {
+      NSString *identifier = mac_notification_identifier (notification_id);
+
+      mac_within_gui (^{
+	  UNUserNotificationCenter *center =
+	    UNUserNotificationCenter.currentNotificationCenter;
+
+	  [emacsController
+	    removeQueuedNotificationRequestWithIdentifier:identifier];
+	  [center removeDeliveredNotificationsWithIdentifiers:@[identifier]];
+	  [center removePendingNotificationRequestsWithIdentifiers:@[identifier]];
+	});
+    }
+}
+
+@implementation EmacsController (Notifications)
+
+- (void)setUpNotifications
+{
+  if (@available (macOS 10.14, *))
+    {
+      if (NSBundle.mainBundle.bundleIdentifier == nil)
+	return;
+
+      UNUserNotificationCenter *center =
+	UNUserNotificationCenter.currentNotificationCenter;
+
+      center.delegate = self;
+
+      /* The custom-dismiss option makes -didReceive report dismissals
+	 too, which drives the :on-close callback.  */
+      UNNotificationCategory *category =
+	[UNNotificationCategory
+	  categoryWithIdentifier:MAC_NOTIFICATION_CATEGORY_ID
+			 actions:@[]
+	       intentIdentifiers:@[]
+			 options:UNNotificationCategoryOptionCustomDismissAction];
+      [center setNotificationCategories:[NSSet setWithObject:category]];
+    }
+}
+
+- (void)queueNotificationRequest:(UNNotificationRequest *)request
+{
+  eassert (pthread_main_np ());
+
+  if (mac_notification_authorization_state
+      == MAC_NOTIFICATION_AUTHORIZATION_DETERMINED)
+    {
+      [self submitNotificationRequest:request];
+
+      return;
+    }
+
+  UNUserNotificationCenter *center =
+    UNUserNotificationCenter.currentNotificationCenter;
+
+  if (mac_pending_notification_requests == nil)
+    mac_pending_notification_requests = [[NSMutableArray alloc] init];
+
+  NSUInteger index =
+    mac_pending_notification_request_index (request.identifier);
+  if (index != NSNotFound)
+    [mac_pending_notification_requests removeObjectAtIndex:index];
+  [mac_pending_notification_requests addObject:request];
+
+  if (mac_pending_notification_requests.count > MAC_PENDING_NOTIFICATION_LIMIT)
+    {
+      NSRange range = NSMakeRange (0, (mac_pending_notification_requests.count
+				       - MAC_PENDING_NOTIFICATION_LIMIT));
+      NSArrayOf (UNNotificationRequest *) *dropped =
+	[mac_pending_notification_requests subarrayWithRange:range];
+
+      [mac_pending_notification_requests removeObjectsInRange:range];
+      [self discardNotificationRequests:dropped];
+    }
+
+  if (mac_notification_authorization_state
+      != MAC_NOTIFICATION_AUTHORIZATION_IDLE)
+    return;
+
+  mac_notification_authorization_state =
+    MAC_NOTIFICATION_AUTHORIZATION_PENDING;
+  [center getNotificationSettingsWithCompletionHandler:
+    ^(UNNotificationSettings *settings) {
+      dispatch_async (dispatch_get_main_queue (), ^{
+	  UNAuthorizationStatus status = settings.authorizationStatus;
+
+	  if (status == UNAuthorizationStatusNotDetermined)
+	    {
+	      [center
+		requestAuthorizationWithOptions:(UNAuthorizationOptionAlert
+						 | UNAuthorizationOptionSound)
+		completionHandler:^(BOOL granted, NSError *error) {
+		  dispatch_async (dispatch_get_main_queue (), ^{
+		      [self completeNotificationAuthorizationRequest:
+			      (granted && error == nil)];
+		    });
+		}];
+	    }
+	  else
+	    [self completeNotificationAuthorizationRequest:
+		    (status == UNAuthorizationStatusAuthorized
+		     || status == UNAuthorizationStatusProvisional)];
+	});
+    }];
+}
+
+- (void)submitNotificationRequest:(UNNotificationRequest *)request
+{
+  eassert (pthread_main_np ());
+
+  if (mac_submitting_notification_requests == nil)
+    mac_submitting_notification_requests =
+      [[NSMutableDictionary alloc] init];
+  mac_submitting_notification_requests[request.identifier] = request;
+
+  UNUserNotificationCenter *center =
+    UNUserNotificationCenter.currentNotificationCenter;
+  [center addNotificationRequest:request
+	   withCompletionHandler:^(NSError *error) {
+      dispatch_async (dispatch_get_main_queue (), ^{
+	  UNNotificationRequest *current =
+	    mac_submitting_notification_requests[request.identifier];
+
+	  /* A newer request may already have replaced this identifier.  */
+	  if (current != request)
+	    return;
+	  [mac_submitting_notification_requests
+	    removeObjectForKey:request.identifier];
+	  if (error
+	      && (mac_pending_notification_request_index (request.identifier)
+		  == NSNotFound))
+	    [self discardNotificationRequests:@[request]];
+	});
+    }];
+}
+
+- (void)removeQueuedNotificationRequestWithIdentifier:(NSString *)identifier
+{
+  eassert (pthread_main_np ());
+
+  NSUInteger index = mac_pending_notification_request_index (identifier);
+  if (index != NSNotFound)
+    [mac_pending_notification_requests removeObjectAtIndex:index];
+  [mac_submitting_notification_requests removeObjectForKey:identifier];
+}
+
+- (void)discardNotificationRequests:
+  (NSArrayOf (UNNotificationRequest *) *)requests
+{
+  eassert (pthread_main_np ());
+
+  NSMutableArrayOf (NSNumber *) *identifiers =
+    [NSMutableArray arrayWithCapacity:requests.count];
+
+  for (UNNotificationRequest *request in requests)
+    {
+      NSNumber *identifier = request.content.userInfo[@"id"];
+
+      if (identifier)
+	[identifiers addObject:identifier];
+    }
+
+  if (identifiers.count != 0)
+    mac_within_lisp_deferred_and_wake (^{
+	for (NSNumber *identifier in identifiers)
+	  mac_notification_take_callback (identifier.longLongValue, false);
+      });
+}
+
+- (void)completeNotificationAuthorizationRequest:(BOOL)granted
+{
+  eassert (pthread_main_np ());
+
+  mac_notification_authorization_state =
+    MAC_NOTIFICATION_AUTHORIZATION_DETERMINED;
+  NSArrayOf (UNNotificationRequest *) *requests =
+    [NSArray arrayWithArray:mac_pending_notification_requests];
+  MRC_RELEASE (mac_pending_notification_requests);
+  mac_pending_notification_requests = nil;
+
+  if (granted)
+    {
+      for (UNNotificationRequest *request in requests)
+	[self submitNotificationRequest:request];
+    }
+  else
+    [self discardNotificationRequests:requests];
+}
+
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+       willPresentNotification:(UNNotification *)notification
+	 withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler
+{
+  /* Present notifications even when Emacs is the frontmost app.  */
+  if (@available (macOS 11.0, *))
+    completionHandler (UNNotificationPresentationOptionBanner
+		       | UNNotificationPresentationOptionList
+		       | UNNotificationPresentationOptionSound);
+  else
+    completionHandler (UNNotificationPresentationOptionAlert
+		       | UNNotificationPresentationOptionSound);
+}
+
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+didReceiveNotificationResponse:(UNNotificationResponse *)response
+	 withCompletionHandler:(void (^)(void))completionHandler
+{
+  NSDictionary *userInfo = response.notification.request.content.userInfo;
+  NSNumber *idNumber = userInfo[@"id"];
+
+  if (idNumber)
+    {
+      intmax_t notification_id = idNumber.longLongValue;
+      NSString *actionId = response.actionIdentifier;
+      bool is_close =
+	[actionId isEqualToString:UNNotificationDismissActionIdentifier];
+
+      /* Dispatch the body click ("default" action) and explicit
+	 dismissals; ignore other system pseudo-actions.  */
+      if (is_close
+	  || [actionId isEqualToString:UNNotificationDefaultActionIdentifier])
+	{
+	  /* This delegate can run on a private callback queue.  Move to the
+	     GUI thread before asking the Lisp thread to create and store the
+	     event.  */
+	  dispatch_async (dispatch_get_main_queue (), ^{
+	      mac_within_lisp_deferred_and_wake (^{
+		  Lisp_Object callback =
+		    mac_notification_take_callback (notification_id, is_close);
+
+		  if (FUNCTIONP (callback))
+		    {
+		      struct input_event inev;
+		      Lisp_Object function_and_args =
+			list3 (callback, make_int (notification_id),
+			       (is_close ? Qundefined
+				: build_string ("default")));
+
+		      EVENT_INIT (inev);
+		      inev.kind = MAC_APPLE_EVENT;
+		      inev.x = Qnotification;
+		      inev.y = Qaction;
+		      inev.frame_or_window = mac_event_frame ();
+		      inev.arg =
+			Fcons (build_string ("aevt"),
+			       list1 (Fcons (build_string ("----"),
+					     Fcons (build_string ("Lisp"),
+						    function_and_args))));
+		      [self storeEvent:&inev];
+		    }
+		});
+	      completionHandler ();
+	    });
+	  return;
+	}
+    }
+
+  completionHandler ();
+}
+
+@end
+
+#else  /* MAC_OS_X_VERSION_MAX_ALLOWED < 120000 */
+
+bool
+mac_notifications_available_p (void)
+{
+  return false;
+}
+
+void
+mac_notifications_notify (Lisp_Object title, Lisp_Object body,
+			  Lisp_Object subtitle, Lisp_Object sound,
+			  Lisp_Object group, Lisp_Object urgency,
+			  intmax_t notification_id)
+{
+}
+
+void
+mac_notifications_close (intmax_t notification_id)
+{
+}
+
+#endif	/* MAC_OS_X_VERSION_MAX_ALLOWED < 120000 */
+
 CFTypeRef
 mac_sound_create (Lisp_Object file, Lisp_Object data)
 {
@@ -16960,6 +17384,19 @@ mac_within_lisp_deferred_unless_popup (void (^block) (void))
     mac_within_lisp (block);
   else
     mac_within_lisp_deferred (block);
+}
+
+/* Like mac_within_lisp_deferred, but also wake a Lisp thread sleeping
+   in mac_select.  During menu tracking the queue is drained on the next
+   inner Lisp round trip, after the GUI thread has left mac_gui_loop, so
+   BLOCK must not call mac_within_gui: compute what needs the GUI thread
+   first and pass it in.  */
+
+static void
+mac_within_lisp_deferred_and_wake (void (^block) (void))
+{
+  mac_within_lisp_deferred (block);
+  [NSApp postDummyEvent];
 }
 
 /* If called from the GUI thread, ask deferred execution of BLOCK to

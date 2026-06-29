@@ -35,6 +35,16 @@
 (remove-hook 'after-delete-frame-functions
 	     #'mac-abort-minibuffer-after-delete-frame)
 
+(ert-deftest mac-win-notification-action-callback ()
+  (let (result)
+    (mac-dispatch-apple-event
+     (list 'mac-apple-event [notification action]
+	   (list "aevt"
+		 (list "----" "Lisp"
+		       (lambda (id action) (setq result (list id action)))
+		       42 "default"))))
+    (should (equal result '(42 "default")))))
+
 (ert-deftest mac-win-daemon-warm-up-frame-starts-transparent ()
   (let ((frame-alpha-lower-limit 20)
 	make-frame-parameters

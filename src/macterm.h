@@ -683,6 +683,12 @@ extern void mac_end_cg_clip (struct frame *);
 extern void mac_scroll_area (struct frame *, GC, int, int, int, int, int, int);
 extern Lisp_Object mac_color_lookup (const char *);
 extern Lisp_Object mac_color_list_alist (void);
+extern bool mac_notifications_available_p (void);
+extern void mac_notifications_notify (Lisp_Object, Lisp_Object, Lisp_Object,
+				      Lisp_Object, Lisp_Object, Lisp_Object,
+				      intmax_t);
+extern void mac_notifications_close (intmax_t);
+extern Lisp_Object mac_notification_take_callback (intmax_t, bool);
 extern Lisp_Object mac_display_monitor_attributes_list (struct mac_display_info *);
 extern void mac_create_scroll_bar (struct scroll_bar *);
 extern void mac_dispose_scroll_bar (struct scroll_bar *);

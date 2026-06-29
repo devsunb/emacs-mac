@@ -1179,6 +1179,16 @@ Currently the `mailto' and `org-protocol' schemes are supported."
 
 (define-key mac-apple-event-map [internet-event get-url] 'mac-ae-get-url)
 
+(defun mac-handle-notification-callback (event)
+  "Run the callback carried by notification EVENT."
+  (interactive "e")
+  (let ((function-and-args
+	 (cdr (mac-ae-parameter (mac-event-ae event)))))
+    (apply (car function-and-args) (cdr function-and-args))))
+
+(define-key mac-apple-event-map [notification action]
+  'mac-handle-notification-callback)
+
 ;;; ODB Editor Suite
 (defvar mac-odb-received-apple-events nil
   "List of received Apple Events containing ODB Editor Suite parameters.")

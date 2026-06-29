@@ -5307,6 +5307,257 @@ frame_parm_handler mac_frame_parm_handlers[] =
   mac_set_transparent_titlebar,
 };
 
+
+/* Desktop notifications.  */
+
+/* Notification id (integer) -> (SERIAL . (ON-ACTION . ON-CLOSE)).
+   Populated by `mac-notifications-notify' and consumed on the Lisp
+   thread by `mac_notification_take_callback'.  */
+static Lisp_Object mac_notification_table;
+
+/* Registration order, so the oldest entry can be found.  */
+static intmax_t mac_notification_serial;
+
+/* If at least `mac-notifications-callback-limit' entries remain, drop the
+   oldest until one slot remains for the new callback.  Called after removing
+   any callback that the new one will replace.  */
+
+static void
+mac_notification_prune (void)
+{
+  struct Lisp_Hash_Table *h = XHASH_TABLE (mac_notification_table);
+
+  if (mac_notifications_callback_limit > 0)
+    while ((EMACS_INT) h->count >= mac_notifications_callback_limit)
+      {
+	Lisp_Object oldest_key = Qnil;
+	intmax_t oldest = INTMAX_MAX;
+	bool found = false;
+
+	DOHASH_SAFE (h, i)
+	  {
+	    Lisp_Object val = HASH_VALUE (h, i);
+	    intmax_t serial = (CONSP (val) && FIXNUMP (XCAR (val))
+			       ? XFIXNUM (XCAR (val)) : INTMAX_MAX);
+	    if (!found || serial < oldest)
+	      {
+		oldest = serial;
+		oldest_key = HASH_KEY (h, i);
+		found = true;
+	      }
+	  }
+
+	if (!found)
+	  break;
+	Fremhash (oldest_key, mac_notification_table);
+      }
+}
+
+/* Remove the entry for notification ID and return its :on-close
+   callback when IS_CLOSE, else its :on-action callback (nil if none).
+   The entry goes unconditionally: both outcomes dispose of it.  Lisp
+   thread only.  */
+
+Lisp_Object
+mac_notification_take_callback (intmax_t id, bool is_close)
+{
+  Lisp_Object key = make_int (id);
+  Lisp_Object item = Fgethash (key, mac_notification_table, Qnil);
+  Lisp_Object callback = Qnil;
+
+  if (CONSP (item) && CONSP (XCDR (item)))
+    {
+      Lisp_Object callbacks = XCDR (item);
+      callback = is_close ? XCDR (callbacks) : XCAR (callbacks);
+      Fremhash (key, mac_notification_table);
+    }
+
+  return callback;
+}
+
+DEFUN ("mac-notifications-notify", Fmac_notifications_notify,
+       Smac_notifications_notify, 0, MANY, 0,
+       doc: /* Display a desktop notification through Notification Center.
+ARGS must contain keywords followed by values.  Each of the following
+keywords is understood:
+
+  :title	The notification title.
+  :body		The notification body.
+  :subtitle	A string shown between the title and body, or nil.
+  :sound	The name of a sound file to play, passed to
+		+[UNNotificationSound soundNamed:] (looked up in the
+		application bundle and Library/Sounds directories), the
+		string "default" for the default notification sound, or
+		nil for silence.
+  :group	A string used as the notification's thread identifier,
+		causing notifications sharing it to be grouped together,
+		or nil.
+  :replaces-id	The id of a previous notification to supersede.  The new
+		notification reuses that id and replaces the old one
+		in place.
+  :urgency	One of the symbols `low', `normal' (the default) or
+		`critical', mapped to the notification's interruption
+		level on macOS 12 and later.  Note that `critical' only
+		breaks through Do Not Disturb when the application bundle
+		carries the time-sensitive notifications entitlement;
+		otherwise it behaves like `normal'.
+  :on-action	Function called when the notification is activated (its
+		body is clicked).  Called with two arguments: the integer
+		id of the notification, and the invoked action's key as a
+		string.  Only the default action is supported, so the key
+		is always "default".
+  :on-close	Function called when the notification is dismissed by the
+		user.  Called with two arguments: the integer id of the
+		notification, and a symbol giving the reason it closed,
+		which is always `undefined' on this platform.
+
+A missing title or body is treated as an empty string; if both end up
+empty, the notification's title falls back to the app name ("Emacs").
+Value is an integer uniquely identifying the notification, which may
+subsequently be given as the `:replaces-id' of another call, or passed
+to `mac-notifications-close'.
+
+Notifications are delivered through the UserNotifications framework,
+which requires Emacs to run as a bundled application (Emacs.app) with a
+bundle identifier; otherwise this function signals an error.  The first
+delivery prompts for permission, which can be managed afterwards under
+System Settings > Notifications > Emacs.
+
+usage: (mac-notifications-notify &rest ARGS) */)
+  (ptrdiff_t nargs, Lisp_Object *args)
+{
+  Lisp_Object title, body, subtitle, sound, group, replaces_id, urgency;
+  Lisp_Object key, value, action_cb, close_cb;
+  ptrdiff_t i;
+  static intmax_t counter;
+  static bool counter_seeded;
+  intmax_t id;
+  bool have_callbacks;
+
+  if (nargs & 1)
+    error ("Odd number of arguments in call to `mac-notifications-notify'");
+
+  if (!mac_notifications_available_p ())
+    error ("Desktop notifications are unavailable; Emacs must run as a"
+	   " bundled application with the Mac window system initialized");
+
+  title = body = subtitle = sound = group = replaces_id = urgency = Qnil;
+  action_cb = close_cb = Qnil;
+
+  for (i = 0; i < nargs; i += 2)
+    {
+      key = args[i];
+      value = args[i + 1];
+
+      if (EQ (key, QCtitle))
+	title = value;
+      else if (EQ (key, QCbody))
+	body = value;
+      else if (EQ (key, QCsubtitle))
+	subtitle = value;
+      else if (EQ (key, QCsound))
+	sound = value;
+      else if (EQ (key, QCgroup))
+	group = value;
+      else if (EQ (key, QCreplaces_id))
+	replaces_id = value;
+      else if (EQ (key, QCurgency))
+	urgency = value;
+      else if (EQ (key, QCon_action))
+	action_cb = value;
+      else if (EQ (key, QCon_close))
+	close_cb = value;
+    }
+
+  if (NILP (title))
+    title = empty_unibyte_string;
+  if (NILP (body))
+    body = empty_unibyte_string;
+
+  CHECK_STRING (title);
+  CHECK_STRING (body);
+  if (SCHARS (title) == 0 && SCHARS (body) == 0)
+    title = build_string ("Emacs");
+  if (!NILP (subtitle))
+    CHECK_STRING (subtitle);
+  if (!NILP (sound))
+    CHECK_STRING (sound);
+  if (!NILP (group))
+    CHECK_STRING (group);
+
+  if (NILP (urgency))
+    urgency = Qnormal;
+  else if (!EQ (urgency, Qlow) && !EQ (urgency, Qnormal)
+	   && !EQ (urgency, Qcritical))
+    signal_error ("Invalid notification urgency given", urgency);
+
+  if (NILP (replaces_id))
+    {
+      if (!counter_seeded)
+	{
+	  counter = get_random () & ~(((intmax_t) 1 << 20) - 1);
+	  counter_seeded = true;
+	}
+      counter++;
+      id = counter;
+    }
+  else
+    {
+      CHECK_INTEGER (replaces_id);
+      if (!integer_to_intmax (replaces_id, &id))
+	signal_error ("Invalid notification id", replaces_id);
+    }
+
+  have_callbacks = (!NILP (action_cb) || !NILP (close_cb));
+
+  if (have_callbacks)
+    {
+      key = make_int (id);
+
+      Fremhash (key, mac_notification_table);
+      mac_notification_prune ();
+      Fputhash (key,
+		Fcons (make_int (++mac_notification_serial),
+		       Fcons (action_cb, close_cb)),
+		mac_notification_table);
+    }
+  else
+    /* Discard any stale callbacks lingering from a superseded id.  */
+    Fremhash (make_int (id), mac_notification_table);
+
+  block_input ();
+  mac_notifications_notify (title, body, subtitle, sound, group, urgency,
+			    id);
+  unblock_input ();
+
+  return make_int (id);
+}
+
+DEFUN ("mac-notifications-close", Fmac_notifications_close,
+       Smac_notifications_close, 1, 1, 0,
+       doc: /* Remove the notification identified by ID.
+ID is an integer previously returned by `mac-notifications-notify'.
+Both delivered and still-pending notifications with that ID are
+removed, and any callbacks registered for it are discarded.  */)
+  (Lisp_Object id)
+{
+  intmax_t notification_id;
+
+  CHECK_INTEGER (id);
+  if (!integer_to_intmax (id, &notification_id))
+    signal_error ("Invalid notification id", id);
+
+  if (mac_notifications_available_p ())
+    {
+      block_input ();
+      mac_notifications_close (notification_id);
+      unblock_input ();
+    }
+  Fremhash (make_int (notification_id), mac_notification_table);
+
+  return Qnil;
+}
+
 void
 syms_of_macfns (void)
 {
@@ -5360,6 +5611,20 @@ syms_of_macfns (void)
   DEFSYM (Qpage_curl_with_shadow, "page-curl-with-shadow");
   DEFSYM (Qripple, "ripple");
   DEFSYM (Qswipe, "swipe");
+
+  /* Symbols for `mac-notifications-notify'.  Qnormal and Qundefined are
+     defined elsewhere in the build.  */
+  DEFSYM (QCtitle, ":title");
+  DEFSYM (QCbody, ":body");
+  DEFSYM (QCsubtitle, ":subtitle");
+  DEFSYM (QCsound, ":sound");
+  DEFSYM (QCgroup, ":group");
+  DEFSYM (QCreplaces_id, ":replaces-id");
+  DEFSYM (QCurgency, ":urgency");
+  DEFSYM (QCon_action, ":on-action");
+  DEFSYM (QCon_close, ":on-close");
+  DEFSYM (Qlow, "low");
+  DEFSYM (Qcritical, "critical");
 
   DEFSYM (QXdndSelection, "XdndSelection");
   DEFSYM (QXdndActionCopy, "XdndActionCopy");
@@ -5566,4 +5831,18 @@ respectively.  */);
   defsubr (&Smac_frame_tab_group_property);
   defsubr (&Smac_send_action);
   defsubr (&Smac_start_animation);
+  defsubr (&Smac_notifications_notify);
+  defsubr (&Smac_notifications_close);
+
+  DEFVAR_INT ("mac-notifications-callback-limit",
+	      mac_notifications_callback_limit,
+    doc: /* Maximum number of pending notification callbacks to retain.
+This bounds the callbacks registered by `mac-notifications-notify' that
+have not yet been delivered.  When registering a new callback would leave
+more than this many entries, the oldest are dropped until the limit is met.
+A value of zero or less disables this limit.  */);
+  mac_notifications_callback_limit = 256;
+
+  mac_notification_table = CALLN (Fmake_hash_table, QCtest, Qeql);
+  staticpro (&mac_notification_table);
 }
