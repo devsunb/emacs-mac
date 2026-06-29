@@ -7615,7 +7615,7 @@ fail;
      else
        AC_MSG_RESULT(before 11)
      fi
-     libs_macgui="-framework Carbon -framework WebKit -framework Quartz -framework QuartzCore -framework IOKit -framework OSAKit -framework Accelerate -framework IOSurface $libs_metal $libs_uniform_type_identifiers -framework Cocoa"
+     libs_macgui="-framework Carbon -framework WebKit -framework Quartz -framework QuartzCore -framework IOKit -framework OSAKit -framework Accelerate -framework IOSurface $libs_metal $libs_uniform_type_identifiers -weak_framework UserNotifications -framework Cocoa"
      headerpad_extra=BD0
    else
      libs_macgui=$libs_nsgui
