@@ -932,6 +932,38 @@ mac_autorelease_loop (Lisp_Object (^body) (void))
   while (!NILP (val));
 }
 
+/* objc_autoreleasePoolPush/Pop are what @autoreleasepool compiles to;
+   they are declared in <objc/objc-internal.h>, not in the public SDK.  */
+extern void *objc_autoreleasePoolPush (void);
+extern void objc_autoreleasePoolPop (void *);
+
+static void
+mac_autorelease_pool_pop (void *pool)
+{
+  block_input ();
+  objc_autoreleasePoolPop (pool);
+  unblock_input ();
+}
+
+void
+mac_autorelease_loop_protected (Lisp_Object (^body) (void))
+{
+  Lisp_Object val;
+
+  do
+    {
+      specpdl_ref count = SPECPDL_INDEX ();
+      /* Push outside block_input: unblock_input could run pending
+	 signals before the pool is recorded.  */
+      void *pool = objc_autoreleasePoolPush ();
+
+      record_unwind_protect_ptr (mac_autorelease_pool_pop, pool);
+      val = body ();
+      unbind_to (count, Qnil);
+    }
+  while (!NILP (val));
+}
+
 #else
 
 void *

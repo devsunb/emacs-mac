@@ -1362,7 +1362,7 @@ command_loop_1 (void)
     kset_last_repeatable_command (current_kboard, Vreal_this_command);
 
 #if MAC_USE_AUTORELEASE_LOOP
-  mac_autorelease_loop (^
+  mac_autorelease_loop_protected (^
 #else
   while (true)
 #endif
