@@ -1231,15 +1231,22 @@ thread_all_before_buffer_killed (Lisp_Object current)
 int
 thread_try_acquire_global_lock (void)
 {
+  int err = pthread_mutex_trylock (&global_lock);
+
   /* Sometimes we try to acquire the lock after a lisp thread has
      completed, but before another lisp thread (like the main lisp
      thread) has re-acquired the lock and set itself as the
      current_thread.  Since we often need to access buffer parameters
      from the current thread, we should not acquire the lock unless one
-     is set. */
-  if (!current_thread)
-    return EBUSY;
-  return pthread_mutex_trylock (&global_lock);
+     is set.  Check after taking the lock: current_thread is reset only
+     by a thread holding it, so checking first races with an exiting
+     Lisp thread.  */
+  if (err == 0 && !current_thread)
+    {
+      pthread_mutex_unlock (&global_lock);
+      err = EBUSY;
+    }
+  return err;
 }
 
 int
