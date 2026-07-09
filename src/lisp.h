@@ -5466,6 +5466,11 @@ extern void mac_autorelease_loop (Lisp_Object (
 					       __attribute__ ((noescape))
 #endif
 					       ^) (void));
+extern void mac_autorelease_loop_protected (Lisp_Object (
+#if __has_attribute (noescape)
+							 __attribute__ ((noescape))
+#endif
+							 ^) (void));
 #else
 extern void *mac_alloc_autorelease_pool (void);
 extern void mac_release_autorelease_pool (void *);
