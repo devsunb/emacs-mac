@@ -5058,6 +5058,32 @@ mac_postprocess_image_for_2x (struct image *img)
     }
 }
 
+/* This is intended to use from automated tests.  */
+
+#ifdef ENABLE_CHECKING
+
+DEFUN ("image--set-test-frame-backing-scale-factor",
+       Fimage__set_test_frame_backing_scale_factor,
+       Simage__set_test_frame_backing_scale_factor, 2, 2, 0,
+       doc: /* Set FRAME's backing scale factor to SCALE for image tests.
+SCALE must be 1 or 2.  Return the previous value.
+
+This internal function changes Emacs's recorded value only; restore the
+previous value when done.  */)
+  (Lisp_Object frame, Lisp_Object scale)
+{
+  CHECK_FIXNUM (scale);
+  if (!RANGED_FIXNUMP (1, scale, 2))
+    args_out_of_range_3 (scale, make_fixnum (1), make_fixnum (2));
+
+  struct frame *f = decode_window_system_frame (frame);
+  int old_scale = FRAME_BACKING_SCALE_FACTOR (f);
+  FRAME_BACKING_SCALE_FACTOR (f) = XFIXNUM (scale);
+  return make_fixnum (old_scale);
+}
+
+#endif /* ENABLE_CHECKING */
+
 static void
 mac_cg_image_source_get_pixel_size (CGImageSourceRef source, size_t index,
 				    int *width, int *height)
@@ -5320,6 +5346,7 @@ image_load_image_io (struct frame *f, struct image *img, CFStringRef type)
 		    {
 		      CFNumberRef dpi_width_ref = CFDictionaryGetValue (props, kCGImagePropertyDPIWidth);
 		      CFNumberRef dpi_height_ref = CFDictionaryGetValue (props, kCGImagePropertyDPIHeight);
+		      bool dpi_2x_p = false;
 
 		      /* Auto-detect high-DPI 2x images */
 		      if (img->target_backing_scale == 0 && (dpi_width_ref || dpi_height_ref))
@@ -5333,11 +5360,15 @@ image_load_image_io (struct frame *f, struct image *img, CFStringRef type)
 
 			  double max_dpi = fmax(dpi_width, dpi_height);
 			  if (max_dpi > 115.0) /* High DPI */
-			    img->target_backing_scale = 2;
+			    {
+			      img->target_backing_scale =
+				FRAME_BACKING_SCALE_FACTOR (f);
+			      dpi_2x_p = true;
+			    }
 			}
 		      width = CGImageGetWidth (cg_image);
 		      height = CGImageGetHeight (cg_image);
-		      if (img->target_backing_scale == 2)
+		      if (img->target_backing_scale == 2 || dpi_2x_p)
 			width /= 2, height /= 2;
 		      obj = cg_image;
 		      default_bg = NULL;
@@ -15520,6 +15551,9 @@ non-numeric, there is no explicit limit on the size of images.  */);
 #endif
 #ifdef HAVE_MACGUI
   defsubr (&Simage_io_types);
+#ifdef ENABLE_CHECKING
+  defsubr (&Simage__set_test_frame_backing_scale_factor);
+#endif
 #endif
   defsubr (&Sclear_image_cache);
   defsubr (&Simage_flush);
