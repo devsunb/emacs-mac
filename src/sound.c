@@ -1428,6 +1428,17 @@ The return value is the integer volume setting before the change, if any.  */)
 
 #endif /* WINDOWSNT */
 
+#ifdef HAVE_MACGUI
+/* Unwind cleanup installed by play-sound-internal.  */
+static void
+mac_sound_release (void *arg)
+{
+  block_input ();
+  CFRelease ((CFTypeRef) arg);
+  unblock_input ();
+}
+#endif /* HAVE_MACGUI */
+
 DEFUN ("play-sound-internal", Fplay_sound_internal, Splay_sound_internal, 1, 1, 0,
        doc: /* Play sound SOUND.
 
@@ -1557,6 +1568,10 @@ Internal use only, use `play-sound' instead.  */)
 
   block_input ();
   mac_sound = mac_sound_create (file, attrs[SOUND_DATA]);
+  /* Register the release before unblock_input can process pending
+     signals, so that no later exit leaks the object.  */
+  if (mac_sound)
+    record_unwind_protect_ptr (mac_sound_release, (void *) mac_sound);
   unblock_input ();
   if (mac_sound == NULL)
     error ("Unknown sound format");
@@ -1565,7 +1580,6 @@ Internal use only, use `play-sound' instead.  */)
 
   block_input ();
   mac_sound_play (mac_sound, attrs[SOUND_VOLUME], attrs[SOUND_DEVICE]);
-  CFRelease (mac_sound);
   unblock_input ();
 #endif /* HAVE_MACGUI */
 
