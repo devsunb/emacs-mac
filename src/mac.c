@@ -274,7 +274,21 @@ mac_aelist_to_lisp (const AEDescList *desc_list)
 
 	  default:
 	    if (desc_type == typeNull)
-	      elem = Qnil;
+	      {
+		/* AESizeOfNthItem does not report the keyword, so ask
+		   AEGetNthDesc for it as the composite case does; on
+		   failure the field is dropped.  AEList elements have no
+		   keyword.  */
+		if (!attribute_p
+		    && desc_list->descriptorType != typeAEList)
+		  {
+		    err = AEGetNthDesc (desc_list, count, typeWildCard,
+					&keyword, &desc);
+		    if (err == noErr)
+		      AEDisposeDesc (&desc);
+		  }
+		elem = Qnil;
+	      }
 	    else
 	      {
 		elem = make_uninit_string (size);
