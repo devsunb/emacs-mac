@@ -4232,7 +4232,7 @@ mac_handle_visibility_change (struct frame *f)
   else if (visible == 1)
     SET_FRAME_GARBAGED (f);
   else if (!visible)
-    if (iconified)
+    if (iconified && !FRAME_ICONIFIED_P (f))
       {
 	EVENT_INIT (buf);
 	buf.kind = ICONIFY_EVENT;
@@ -4263,7 +4263,7 @@ mac_make_frame_visible (struct frame *f)
       if (!FRAME_VISIBLE_P (f))
 	{
 	  block_input ();
-	  mac_show_frame_window (f);
+	  mac_show_frame_window (f, false);
 	  unblock_input ();
 
 	  SET_FRAME_VISIBLE (f, true);
@@ -4286,8 +4286,13 @@ mac_make_frame_visible (struct frame *f)
 
       f->output_data.mac->asked_for_visible = true;
 
+      /* FRAME_ICONIFIED_P can disagree with NSWindow, so ask the
+	 window.  Show before deminiaturizing: -[NSWindow isVisible] is
+	 already true once -deminiaturize: has been sent.  */
+      bool collapsed_p = mac_is_frame_window_collapsed (f);
+
+      mac_show_frame_window (f, collapsed_p);
       mac_collapse_frame_window (f, false);
-      mac_show_frame_window (f);
     }
 
   XFlush (FRAME_MAC_DISPLAY (f));
@@ -4360,7 +4365,7 @@ mac_iconify_frame (struct frame *f)
   block_input ();
 
   if (! FRAME_VISIBLE_P (f))
-    mac_show_frame_window (f);
+    mac_show_frame_window (f, false);
 
   err = mac_collapse_frame_window (f, true);
 

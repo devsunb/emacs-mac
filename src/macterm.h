@@ -631,7 +631,7 @@ extern bool mac_is_frame_window_drawable (struct frame *);
 extern void mac_bring_frame_window_to_front (struct frame *);
 extern void mac_send_frame_window_behind (struct frame *);
 extern void mac_hide_frame_window (struct frame *);
-extern void mac_show_frame_window (struct frame *);
+extern void mac_show_frame_window (struct frame *, bool);
 extern OSStatus mac_collapse_frame_window (struct frame *, bool);
 extern bool mac_is_frame_window_frontmost (struct frame *);
 extern void mac_activate_frame_window (struct frame *);

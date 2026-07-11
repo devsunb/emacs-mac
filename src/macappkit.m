@@ -2243,6 +2243,16 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
   needsOrderFrontOnUnhide = flag;
 }
 
+- (BOOL)suppressActivationOnDeminiaturize
+{
+  return suppressActivationOnDeminiaturize;
+}
+
+- (void)setSuppressActivationOnDeminiaturize:(BOOL)flag
+{
+  suppressActivationOnDeminiaturize = flag;
+}
+
 - (void)applicationDidUnhide:(NSNotification *)notification
 {
   if (needsOrderFrontOnUnhide)
@@ -3346,8 +3356,18 @@ mac_with_suppressed_transparent_titlebar( NSWindow* window, BOOL assumeTranspare
 - (void)windowDidDeminiaturize:(NSNotification *)notification
 {
   struct frame *f = emacsFrame;
+  BOOL suppress = emacsWindow.suppressActivationOnDeminiaturize;
 
+  emacsWindow.suppressActivationOnDeminiaturize = NO;
   mac_handle_visibility_change (f);
+  if (!suppress && !FRAME_TOOLTIP_P (f) && !FRAME_NO_FOCUS_ON_MAP (f)
+      && !mac_is_current_process_frontmost ())
+    mac_within_app (^{
+	if (applicationHiddenExplicitly && [NSApp isHidden])
+	  [NSApp unhide:nil];
+	mac_ensure_app_activated ();
+	[emacsWindow makeKeyAndOrderFront:nil];
+      });
 }
 
 - (void)windowDidChangeScreen:(NSNotification *)notification
@@ -4433,8 +4453,14 @@ mac_is_frame_window_drawable (struct frame *f)
   return ![frameController emacsViewIsHiddenOrHasHiddenAncestor];
 }
 
+/* ORDER_FRONT_P false means the window is being deminiaturized: the
+   animation brings it forward and ordering it front here would flash
+   it, so -windowDidDeminiaturize: activates afterwards.  The
+   hidden-app and tab group handling still run.  */
+
 static void
-mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
+mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p,
+					      bool order_front_p)
 {
   EmacsWindow *window = FRAME_MAC_WINDOW_OBJECT (f);
 
@@ -4458,7 +4484,7 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 		[parentWindow removeChildWindow:window];
 		[parentWindow addChildWindow:window ordered:NSWindowAbove];
 	      }
-	    if (activate_p)
+	    if (activate_p && order_front_p)
 	      [window makeKeyWindow];
 	  }
 	else
@@ -4507,10 +4533,13 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 		  }
 	      }
 
-	    if (activate_p)
-	      [window makeKeyAndOrderFront:nil];
-	    else
-	      [window orderFront:nil];
+	    if (order_front_p)
+	      {
+		if (activate_p)
+		  [window makeKeyAndOrderFront:nil];
+		else
+		  [window orderFront:nil];
+	      }
 
 	    if (tabbingMode != NSWindowTabbingModeAutomatic)
 	      {
@@ -4525,7 +4554,7 @@ mac_bring_frame_window_to_front_and_activate (struct frame *f, bool activate_p)
 void
 mac_bring_frame_window_to_front (struct frame *f)
 {
-  mac_bring_frame_window_to_front_and_activate (f, false);
+  mac_bring_frame_window_to_front_and_activate (f, false, true);
 }
 
 void
@@ -4563,7 +4592,13 @@ mac_hide_frame_window (struct frame *f)
 
   mac_within_gui (^{
       if ([window isMiniaturized])
-	[window deminiaturize:nil];
+	{
+	  /* -deminiaturize: completes after the -orderOut: below; keep
+	     -windowDidDeminiaturize: from activating for a window being
+	     hidden.  */
+	  window.suppressActivationOnDeminiaturize = YES;
+	  [window deminiaturize:nil];
+	}
 
       /* Mac OS X 10.6 needs this.  */
       [window.parentWindow removeChildWindow:window];
@@ -4572,14 +4607,18 @@ mac_hide_frame_window (struct frame *f)
     });
 }
 
+/* DEMINIATURIZING_P: do not order the window front here; see
+   mac_bring_frame_window_to_front_and_activate.  */
+
 void
-mac_show_frame_window (struct frame *f)
+mac_show_frame_window (struct frame *f, bool deminiaturizing_p)
 {
   NSWindow *window = FRAME_MAC_WINDOW_OBJECT (f);
 
   if (![window isVisible])
     mac_bring_frame_window_to_front_and_activate (f,
-						  !FRAME_NO_FOCUS_ON_MAP (f));
+						  !FRAME_NO_FOCUS_ON_MAP (f),
+						  !deminiaturizing_p);
 }
 
 OSStatus

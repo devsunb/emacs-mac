@@ -4137,7 +4137,7 @@ DEFUN ("x-show-tip", Fx_show_tip, Sx_show_tip, 1, 6, 0,
   block_input ();
   mac_move_frame_window_structure (tip_f, root_x, root_y);
   mac_size_frame_window (tip_f, width, height, true);
-  mac_show_frame_window (tip_f);
+  mac_show_frame_window (tip_f, false);
   /* Now that we have deferred creation of the window device and also
      turned off automatic display for tooltip windows, we have to draw
      the internal border ourselves after showing the window.  */
