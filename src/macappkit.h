@@ -641,6 +641,10 @@ typedef NSInteger NSGlyphProperty;
      gets unhidden next time.  */
   BOOL needsOrderFrontOnUnhide;
 
+  /* Whether -windowDidDeminiaturize: skips activating the app: set
+     when a window is deminiaturized only to be ordered out.  */
+  BOOL suppressActivationOnDeminiaturize;
+
   /* Positive values mean the usual -constrainFrameRect:toScreen:
      behavior is suspended.  */
   char constrainingToScreenSuspensionCount;
@@ -654,6 +658,8 @@ typedef NSInteger NSGlyphProperty;
 - (void)resumeResizeTracking;
 - (BOOL)needsOrderFrontOnUnhide;
 - (void)setNeedsOrderFrontOnUnhide:(BOOL)flag;
+- (BOOL)suppressActivationOnDeminiaturize;
+- (void)setSuppressActivationOnDeminiaturize:(BOOL)flag;
 - (void)suspendConstrainingToScreen:(BOOL)flag;
 - (void)exitTabGroupOverview;
 @end

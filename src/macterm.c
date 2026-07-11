@@ -4232,7 +4232,7 @@ mac_handle_visibility_change (struct frame *f)
   else if (visible == 1)
     SET_FRAME_GARBAGED (f);
   else if (!visible)
-    if (iconified)
+    if (iconified && !FRAME_ICONIFIED_P (f))
       {
 	EVENT_INIT (buf);
 	buf.kind = ICONIFY_EVENT;
@@ -4286,8 +4286,10 @@ mac_make_frame_visible (struct frame *f)
 
       f->output_data.mac->asked_for_visible = true;
 
-      mac_collapse_frame_window (f, false);
+      /* Show before deminiaturizing: mac_show_frame_window reads
+	 isMiniaturized to decide whether to order the window front.  */
       mac_show_frame_window (f);
+      mac_collapse_frame_window (f, false);
     }
 
   XFlush (FRAME_MAC_DISPLAY (f));
