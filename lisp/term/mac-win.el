@@ -990,7 +990,7 @@ modifies APPLE-EVENT as a side effect and returns APPLE-EVENT."
       (error "Not an Apple event: %S" apple-event)
     (setcdr apple-event
 	    (cons (cons keyword descriptor)
-		  (delete keyword (cdr apple-event))))
+		  (assoc-delete-all keyword (cdr apple-event))))
     apple-event))
 
 (defvar mac-sent-apple-events nil
