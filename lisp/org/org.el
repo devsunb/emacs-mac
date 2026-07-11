@@ -16897,17 +16897,15 @@ a HTML file."
 	    (org-compile-file
 	     image-input-file image-converter image-output-type err-msg log-buf
 	     `((?D . ,(shell-quote-argument (format "%s" dpi)))
-	       (?S . ,(shell-quote-argument (format "%s" (/ dpi 140.0)))))))
-	   (image-output-2x-file
-	    (and
-	     to2xfile
-	     (org-compile-file
-	      image-input-file image-converter image-output-type err-msg log-buf
-	      `((?D . ,(shell-quote-argument (format "%s" (* dpi 2))))
-		(?S . ,(shell-quote-argument (format "%s" (/ dpi 140.0)))))))))
+	       (?S . ,(shell-quote-argument (format "%s" (/ dpi 140.0))))))))
       (copy-file image-output-file tofile 'replace)
-      (if to2xfile
-	  (copy-file image-output-2x-file to2xfile 'replace))
+      (when to2xfile
+	(let ((image-output-2x-file
+	       (org-compile-file
+		image-input-file image-converter image-output-type err-msg log-buf
+		`((?D . ,(shell-quote-argument (format "%s" (* dpi 2))))
+		  (?S . ,(shell-quote-argument (format "%s" (/ dpi 140.0))))))))
+	  (copy-file image-output-2x-file to2xfile 'replace)))
       (dolist (e post-clean)
 	(when (file-exists-p (concat texfilebase e))
 	  (delete-file (concat texfilebase e))))
