@@ -367,6 +367,9 @@ CONFIG_STATUS_FILES_IN = \
 COPYDIR = ${srcdir}/etc ${srcdir}/lisp
 COPYDESTS = "$(DESTDIR)${etcdir}" "$(DESTDIR)${lispdir}"
 
+# install-eln's staging root.
+INSTALL_ELN_DESTDIR = $(ELN_DESTDIR)
+
 ifeq (${mac_self_contained},no)
 ifeq (${ns_self_contained},no)
 BIN_DESTDIR = $(DESTDIR)${bindir}/
@@ -378,6 +381,7 @@ endif
 else
 BIN_DESTDIR='${mac_appbindir}/'
 ELN_DESTDIR = ${mac_applibdir}/
+INSTALL_ELN_DESTDIR = $(DESTDIR)$(ELN_DESTDIR)
 endif
 
 gsettings_SCHEMAS = etc/org.gnu.emacs.defaults.gschema.xml
@@ -674,8 +678,8 @@ endif
 	rm -rf ${ns_appresdir}/share
 endif
 else
-	subdir=${mac_appresdir}/site-lisp && ${write_subdir}
-	rm -rf ${mac_appresdir}/share
+	subdir="$(DESTDIR)${mac_appresdir}/site-lisp" && ${write_subdir}
+	rm -rf "$(DESTDIR)${mac_appresdir}/share"
 endif
 
 ### Windows-specific install target for installing programs produced
@@ -946,9 +950,9 @@ ifeq ($(HAVE_NATIVE_COMP),yes)
 	find native-lisp -exec sh -c \
 	  'for f in "$$@"; do \
 	     if test -d "$$f"; then \
-	       $(MKDIR_P) '\''$(ELN_DESTDIR)'\''"$$f" || exit; \
+	       $(MKDIR_P) '\''$(INSTALL_ELN_DESTDIR)'\''"$$f" || exit; \
 	     else \
-	       $(INSTALL_ELN) "$$f" '\''$(ELN_DESTDIR)'\''"$$f"; \
+	       $(INSTALL_ELN) "$$f" '\''$(INSTALL_ELN_DESTDIR)'\''"$$f"; \
 	     fi || exit; \
 	   done' - {} +
 endif
@@ -965,7 +969,7 @@ uninstall: uninstall-$(NTDIR) uninstall-doc uninstall-gsettings-schemas
 	rm -f "$(DESTDIR)$(includedir)/emacs-module.h"
 	$(MAKE) -C lib-src uninstall
 	-unset CDPATH; \
-	for dir in "$(DESTDIR)${lispdir}" "$(DESTDIR)${etcdir}" '$(ELN_DESTDIR)' ; do 	\
+	for dir in "$(DESTDIR)${lispdir}" "$(DESTDIR)${etcdir}" '$(INSTALL_ELN_DESTDIR)' ; do 	\
 	  if [ -d "$${dir}" ]; then			\
 	    case `cd "$${dir}" ; pwd -P` in		\
 	      "`cd ${srcdir} ; pwd -P`"* ) ;;		\
