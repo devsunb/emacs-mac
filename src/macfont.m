@@ -2296,7 +2296,11 @@ macfont_list (struct frame *f, Lisp_Object spec)
   if (! attributes)
     goto finish;
 
+  /* Retain here, not where the attribute is removed: the goto err in
+     between releases LANGUAGES and then the dictionary holding it.  */
   languages = CFDictionaryGetValue (attributes, kCTFontLanguagesAttribute);
+  if (languages)
+    CFRetain (languages);
 
   if (FIXNUMP (AREF (spec, FONT_SPACING_INDEX)))
     spacing = XFIXNUM (AREF (spec, FONT_SPACING_INDEX));
@@ -2399,10 +2403,7 @@ macfont_list (struct frame *f, Lisp_Object spec)
     }
 
   if (languages)
-    {
-      CFRetain (languages);
-      CFDictionaryRemoveValue (attributes, kCTFontLanguagesAttribute);
-    }
+    CFDictionaryRemoveValue (attributes, kCTFontLanguagesAttribute);
 
   val = Qnil;
   extra = AREF (spec, FONT_EXTRA_INDEX);
@@ -2421,7 +2422,10 @@ macfont_list (struct frame *f, Lisp_Object spec)
                             family_name);
       pat_desc = CTFontDescriptorCreateWithAttributes (attributes);
       if (! pat_desc)
-        goto err;
+        {
+          CFRelease (families);
+          goto err;
+        }
 
       /* CTFontDescriptorCreateMatchingFontDescriptors on Mac OS X
          10.7 returns NULL if pat_desc represents the LastResort font.
@@ -2471,10 +2475,13 @@ macfont_list (struct frame *f, Lisp_Object spec)
             continue;
 
           num = CFDictionaryGetValue (dict, kCTFontSymbolicTrait);
-          CFRelease (dict);
           if (num == NULL
               || !cfnumber_get_font_symbolic_traits_value (num, &sym_traits))
-            continue;
+            {
+              CFRelease (dict);
+              continue;
+            }
+          CFRelease (dict);
 
           if (spacing >= 0
               && !(synth_sym_traits & kCTFontTraitMonoSpace)
@@ -2536,6 +2543,7 @@ macfont_list (struct frame *f, Lisp_Object spec)
                                         &format_val)
                       && format_val == kCTFontFormatBitmap)
                     mask_max &= ~kCTFontTraitBold;
+                  CFRelease (format);
                 }
             }
           if (spacing >= 0)
