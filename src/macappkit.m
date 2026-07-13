@@ -7569,32 +7569,40 @@ mac_ts_active_input_string_in_echo_area_p (struct frame *f)
   struct buffer *b;
   int x, y;
 
+  /* Don't try to inspect the glyph matrix as the gap might be being
+     altered. */
+  if ((poll_suppress_count == 0 && !NILP (Vinhibit_quit))
+      /* Might be called during the select emulation.  */
+      || !mac_try_buffer_and_glyph_matrix_access ())
+    return result;
+
   point = [frameController convertEmacsViewPointFromScreen:thePoint];
   x = point.x;
   y = point.y;
   window = window_from_coordinates (f, x, y, &part, false, false, false);
-  if (!WINDOWP (window) || !EQ (window, f->selected_window))
-    return result;
-
-  /* Convert to window-relative pixel coordinates.  */
-  w = XWINDOW (window);
-  frame_to_window_pixel_xy (w, &x, &y);
-
-  /* Are we in a window whose display is up to date?
-     And verify the buffer's text has not changed.  */
-  b = XBUFFER (w->contents);
-  if (part == ON_TEXT && w->window_end_valid && !window_outdated (w))
+  if (WINDOWP (window) && EQ (window, f->selected_window))
     {
-      int hpos, vpos, area;
-      struct glyph *glyph;
+      /* Convert to window-relative pixel coordinates.  */
+      w = XWINDOW (window);
+      frame_to_window_pixel_xy (w, &x, &y);
 
-      /* Find the glyph under X/Y.  */
-      glyph = x_y_to_hpos_vpos (w, x, y, &hpos, &vpos, 0, 0, &area);
+      /* Are we in a window whose display is up to date?
+	 And verify the buffer's text has not changed.  */
+      b = XBUFFER (w->contents);
+      if (part == ON_TEXT && w->window_end_valid && !window_outdated (w))
+	{
+	  int hpos, vpos, area;
+	  struct glyph *glyph;
 
-      if (glyph != NULL && area == TEXT_AREA
-	  && BUFFERP (glyph->object) && glyph->charpos <= BUF_Z (b))
-	result = glyph->charpos - BUF_BEGV (b);
+	  /* Find the glyph under X/Y.  */
+	  glyph = x_y_to_hpos_vpos (w, x, y, &hpos, &vpos, 0, 0, &area);
+
+	  if (glyph != NULL && area == TEXT_AREA
+	      && BUFFERP (glyph->object) && glyph->charpos <= BUF_Z (b))
+	    result = glyph->charpos - BUF_BEGV (b);
+	}
     }
+  mac_end_buffer_and_glyph_matrix_access ();
 
   return result;
 }
