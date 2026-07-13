@@ -7290,9 +7290,14 @@ event_phase_to_symbol (NSEventPhase phase)
 - (NSAttributedString *)attributedSubstringForProposedRange:(NSRange)aRange
 						actualRange:(NSRangePointer)actualRange
 {
-  NSRange markedRange = [self markedRange];
+  NSRange markedRange;
   NSAttributedString *result = nil;
 
+  /* Might be called during the select emulation.  */
+  if (!mac_try_buffer_and_glyph_matrix_access ())
+    return nil;
+
+  markedRange = [self markedRangeWithBufferAccess];
   if ([self hasMarkedText]
       && NSEqualRanges (NSUnionRange (markedRange, aRange), markedRange))
     {
@@ -7312,9 +7317,7 @@ event_phase_to_symbol (NSEventPhase phase)
       if (actualRange)
 	*actualRange = aRange;
     }
-  else if ((poll_suppress_count != 0 || NILP (Vinhibit_quit))
-	   /* Might be called during the select emulation.  */
-	   && mac_try_buffer_and_glyph_matrix_access ())
+  else if (poll_suppress_count != 0 || NILP (Vinhibit_quit))
     {
       struct frame *f = [self emacsFrame];
       struct window *w = XWINDOW (f->selected_window);
@@ -7406,13 +7409,16 @@ event_phase_to_symbol (NSEventPhase phase)
 	      CFRelease (string);
 	    }
 	}
-      mac_end_buffer_and_glyph_matrix_access ();
     }
+  mac_end_buffer_and_glyph_matrix_access ();
 
   return result;
 }
 
-- (NSRange)markedRange
+/* Like markedRange, but the caller must be inside a successful
+   mac_try_buffer_and_glyph_matrix_access call.  */
+
+- (NSRange)markedRangeWithBufferAccess
 {
   NSUInteger location = NSNotFound;
 
@@ -7427,6 +7433,21 @@ event_phase_to_symbol (NSEventPhase phase)
   /* The cast below is just for determining the return type.  The
      object `markedText' might be of class NSAttributedString.  */
   return NSMakeRange (location, [(NSString *)markedText length]);
+}
+
+- (NSRange)markedRange
+{
+  /* {NSNotFound, 0}: NSTextInputClient defines no range with an
+     unknown location and a length.  */
+  NSRange result = NSMakeRange (NSNotFound, 0);
+
+  if (mac_try_buffer_and_glyph_matrix_access ())
+    {
+      result = [self markedRangeWithBufferAccess];
+      mac_end_buffer_and_glyph_matrix_access ();
+    }
+
+  return result;
 }
 
 - (NSRange)selectedRange
@@ -7482,7 +7503,7 @@ mac_ts_active_input_string_in_echo_area_p (struct frame *f)
   if (mac_try_buffer_and_glyph_matrix_access ())
     {
       struct window *w;
-      NSRange markedRange = self.markedRange;
+      NSRange markedRange = [self markedRangeWithBufferAccess];
 
       if (aRange.location >= NSNotFound
 	  || (self.hasMarkedText
