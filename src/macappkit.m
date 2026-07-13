@@ -7412,7 +7412,10 @@ event_phase_to_symbol (NSEventPhase phase)
   return result;
 }
 
-- (NSRange)markedRange
+/* Like markedRange, but the caller must be inside a successful
+   mac_try_buffer_and_glyph_matrix_access call.  */
+
+- (NSRange)markedRangeWithBufferAccess
 {
   NSUInteger location = NSNotFound;
 
@@ -7427,6 +7430,25 @@ event_phase_to_symbol (NSEventPhase phase)
   /* The cast below is just for determining the return type.  The
      object `markedText' might be of class NSAttributedString.  */
   return NSMakeRange (location, [(NSString *)markedText length]);
+}
+
+- (NSRange)markedRange
+{
+  NSRange result = NSMakeRange (NSNotFound, 0);
+
+  if (![self hasMarkedText])
+    return result;
+
+  if (mac_try_buffer_and_glyph_matrix_access ())
+    {
+      result = [self markedRangeWithBufferAccess];
+      mac_end_buffer_and_glyph_matrix_access ();
+    }
+  /* {NSNotFound, 0}: NSTextInputClient defines no range with an
+     unknown location and a length, and a length would make
+     attributedSubstringForProposedRange: union it.  */
+
+  return result;
 }
 
 - (NSRange)selectedRange
@@ -7482,7 +7504,7 @@ mac_ts_active_input_string_in_echo_area_p (struct frame *f)
   if (mac_try_buffer_and_glyph_matrix_access ())
     {
       struct window *w;
-      NSRange markedRange = self.markedRange;
+      NSRange markedRange = [self markedRangeWithBufferAccess];
 
       if (aRange.location >= NSNotFound
 	  || (self.hasMarkedText
