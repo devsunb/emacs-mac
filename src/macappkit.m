@@ -7569,12 +7569,22 @@ mac_ts_active_input_string_in_echo_area_p (struct frame *f)
   struct buffer *b;
   int x, y;
 
+  /* Don't try to get buffer contents as the gap might be being
+     altered. */
+  if ((poll_suppress_count == 0 && !NILP (Vinhibit_quit))
+      /* Might be called during the select emulation.  */
+      || !mac_try_buffer_and_glyph_matrix_access ())
+    return result;
+
   point = [frameController convertEmacsViewPointFromScreen:thePoint];
   x = point.x;
   y = point.y;
   window = window_from_coordinates (f, x, y, &part, false, false, false);
   if (!WINDOWP (window) || !EQ (window, f->selected_window))
-    return result;
+    {
+      mac_end_buffer_and_glyph_matrix_access ();
+      return result;
+    }
 
   /* Convert to window-relative pixel coordinates.  */
   w = XWINDOW (window);
@@ -7595,6 +7605,7 @@ mac_ts_active_input_string_in_echo_area_p (struct frame *f)
 	  && BUFFERP (glyph->object) && glyph->charpos <= BUF_Z (b))
 	result = glyph->charpos - BUF_BEGV (b);
     }
+  mac_end_buffer_and_glyph_matrix_access ();
 
   return result;
 }
