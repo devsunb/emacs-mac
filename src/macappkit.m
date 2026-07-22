@@ -5512,6 +5512,9 @@ mac_create_frame_window (struct frame *f)
     });
   FRAME_MAC_WINDOW (f) = (void *) CF_ESCAPING_BRIDGE (frameController);
 
+  if (!FRAME_TOOLTIP_P (f))
+    mac_set_frame_alpha (f);
+
   if (f->size_hint_flags & (USPosition | PPosition)
       || FRAME_PARENT_FRAME (f))
     {

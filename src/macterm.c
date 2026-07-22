@@ -639,7 +639,7 @@ mac_set_stipple (GC gc, CFArrayRef stipple)
 #define XFlush(DISPLAY)	(void) 0
 
 
-static void
+void
 mac_set_frame_alpha (struct frame *f)
 {
   struct mac_display_info *dpyinfo = FRAME_DISPLAY_INFO (f);

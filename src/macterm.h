@@ -478,6 +478,7 @@ extern void mac_delete_terminal (struct terminal *terminal);
 extern void mac_query_colors (struct frame *f, Emacs_Color *, int);
 #define mac_display_pixel_height(dpyinfo)	((dpyinfo)->height)
 #define mac_display_pixel_width(dpyinfo)	((dpyinfo)->width)
+extern void mac_set_frame_alpha (struct frame *);
 extern void mac_set_sticky (struct frame *, Lisp_Object, Lisp_Object);
 extern void mac_set_skip_taskbar (struct frame *, Lisp_Object, Lisp_Object);
 extern void mac_set_z_group (struct frame *, Lisp_Object, Lisp_Object);
