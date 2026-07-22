@@ -2107,7 +2107,10 @@ mac_window (struct frame *f)
   mac_create_frame_window (f);
 
   if (FRAME_MAC_WINDOW (f))
-    mac_set_frame_window_background (f, FRAME_BACKGROUND_PIXEL (f));
+    {
+      mac_set_frame_window_background (f, FRAME_BACKGROUND_PIXEL (f));
+      FRAME_TERMINAL (f)->set_frame_alpha_hook (f);
+    }
 
   /* At the moment, the size of the tool bar is not yet known.  We
      record the gravity value of the newly created window and use it
