@@ -1,0 +1,18 @@
+Liquid Glass app icon assets
+============================
+
+The following files in this directory provide the Liquid Glass
+application icon:
+
+  Assets.car             (macOS 26 and later; carries the EmacsLG1,
+                          EmacsLG2 and EmacsLG3 icon variants, of
+                          which CFBundleIconName selects EmacsLG1)
+  EmacsLG1-Default.icns  (macOS 15 and earlier)
+
+Source: https://github.com/jimeh/emacs-liquid-glass-icons
+License: GPL-3.0-or-later
+
+These icons are derivative works of
+etc/images/icons/hicolor/scalable/apps/emacs.svg from the GNU Emacs
+sources, which is likewise licensed under GPL-3.0-or-later.  A copy of
+the GNU General Public License is in the top-level COPYING file.
