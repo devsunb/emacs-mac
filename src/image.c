@@ -2542,7 +2542,8 @@ search_image_cache (struct frame *f, Lisp_Object spec, EMACS_UINT hash,
 			      && (font_family
 				  &&!strcmp (font_family, img->face_font_family))))
 #ifdef HAVE_MACGUI
-	&& (img->target_backing_scale == 0
+	&& (ignore_colors
+	    || img->target_backing_scale == 0
 	    || img->target_backing_scale == FRAME_BACKING_SCALE_FACTOR (f))
 #endif
 	)

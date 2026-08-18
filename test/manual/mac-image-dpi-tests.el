@@ -50,9 +50,7 @@
            (image-flush image frame)
            (image-size image t))
          '(1 2 1))
-      (dolist (scale '(1 2))
-        (image--set-test-frame-backing-scale-factor frame scale)
-        (image-flush image frame))
+      (image-flush image frame)
       (image--set-test-frame-backing-scale-factor frame old-scale))))
 
 (ert-deftest mac-image-dpi-tests-still-size ()
@@ -86,6 +84,35 @@
           (let ((cache-size (image-cache-size)))
             (image-size image t)
             (should (= (image-cache-size) cache-size))))
+      (image-flush image frame)
+      (image--set-test-frame-backing-scale-factor frame old-scale))))
+
+(ert-deftest mac-image-dpi-tests-flush-drops-every-scale ()
+  "One image-flush drops the copies cached for both backing scales."
+  (skip-unless (and (eq window-system 'mac)
+                    (display-images-p)
+                    (image-type-available-p 'png)
+                    (fboundp
+                     'image--set-test-frame-backing-scale-factor)))
+  (let* ((data (base64-decode-string mac-image-dpi-tests--144-dpi-data))
+         (image (create-image data 'png t))
+         (frame (selected-frame))
+         (old-scale
+          (image--set-test-frame-backing-scale-factor frame 1)))
+    (unwind-protect
+        (let ((empty-size
+               (progn
+                 (image--set-test-frame-backing-scale-factor frame 2)
+                 (image-flush image frame)
+                 (image--set-test-frame-backing-scale-factor frame 1)
+                 (image-flush image frame)
+                 (image-cache-size))))
+          (image-size image t)
+          (image--set-test-frame-backing-scale-factor frame 2)
+          (image-size image t)
+          (image--set-test-frame-backing-scale-factor frame 1)
+          (image-flush image frame)
+          (should (= (image-cache-size) empty-size)))
       (image-flush image frame)
       (image--set-test-frame-backing-scale-factor frame old-scale))))
 
