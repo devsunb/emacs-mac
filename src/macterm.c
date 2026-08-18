@@ -4216,7 +4216,23 @@ mac_handle_visibility_change (struct frame *f)
   if (visible)
     {
       if (FRAME_CHECK_FULLSCREEN_NEEDED_P (f))
-	mac_check_fullscreen (f);
+	{
+	  if (mac_gui_thread_p ())
+	    /* Re-test in the block: another check may have run, or the
+	       frame may have been miniaturized or deleted.  Keep
+	       FRAME_VISIBLE_P first: the delete path clears visibility
+	       before freeing output_data.mac, which
+	       FRAME_CHECK_FULLSCREEN_NEEDED_P dereferences.  On the
+	       Lisp thread f->visible is stale until updated below, so
+	       do not re-test there.  */
+	    mac_within_lisp_deferred_if_gui_thread (^{
+		if (FRAME_VISIBLE_P (f)
+		    && FRAME_CHECK_FULLSCREEN_NEEDED_P (f))
+		  mac_check_fullscreen (f);
+	      });
+	  else
+	    mac_check_fullscreen (f);
+	}
 
       if (FRAME_ICONIFIED_P (f))
 	{
