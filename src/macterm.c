@@ -4215,7 +4215,9 @@ mac_handle_visibility_change (struct frame *f)
 
   if (visible)
     {
-      if (FRAME_CHECK_FULLSCREEN_NEEDED_P (f))
+      /* Only on the Lisp thread: mac_check_fullscreen waits for the
+	 GUI thread, and the mac_read_socket sweep retries here.  */
+      if (FRAME_CHECK_FULLSCREEN_NEEDED_P (f) && !mac_gui_thread_p ())
 	mac_check_fullscreen (f);
 
       if (FRAME_ICONIFIED_P (f))
