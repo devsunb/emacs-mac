@@ -645,6 +645,8 @@ mac_coerce_file_name_ptr (DescType type_code, const void *data_ptr,
 	    err = errAECoercionFail;
 	  CFRelease (url);
 	}
+      else
+	err = errAECoercionFail;
     }
   else
     emacs_abort ();
@@ -2504,7 +2506,9 @@ Each type should be a string of length 4 or the symbol
   OSErr err;
   Lisp_Object result = Qnil;
   DescType src_desc_type, dst_desc_type;
-  AEDesc dst_desc;
+  /* Initialized so a coercion handler that reports success without
+     writing the descriptor cannot make the code below read garbage.  */
+  AEDesc dst_desc = {typeNull, NULL};
 
   CHECK_STRING (src_data);
   if (EQ (src_type, Qundecoded_file_name))
