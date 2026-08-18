@@ -2542,7 +2542,8 @@ search_image_cache (struct frame *f, Lisp_Object spec, EMACS_UINT hash,
 			      && (font_family
 				  &&!strcmp (font_family, img->face_font_family))))
 #ifdef HAVE_MACGUI
-	&& (img->target_backing_scale == 0
+	&& (ignore_colors
+	    || img->target_backing_scale == 0
 	    || img->target_backing_scale == FRAME_BACKING_SCALE_FACTOR (f))
 #endif
 	)
@@ -2613,6 +2614,7 @@ uncache_image (struct frame *f, Lisp_Object spec)
 {
   struct image *img;
   EMACS_UINT hash = sxhash (filter_image_spec (spec));
+  bool freed = false;
 
   /* Because the background colors are based on the current face, we
      can have multiple copies of an image with the same spec. We want
@@ -2621,9 +2623,19 @@ uncache_image (struct frame *f, Lisp_Object spec)
   while ((img = search_image_cache (f, spec, hash, 0, 0, 0, NULL, true)))
     {
       free_image (f, img);
-      /* As display glyphs may still be referring to the image ID, we
-	 must garbage the frame (Bug#6426).  */
-      SET_FRAME_GARBAGED (f);
+      freed = true;
+    }
+
+  /* As display glyphs may still be referring to the image ID, we
+     must garbage the frame (Bug#6426).  The cache is shared, so the
+     other frames using it may refer to the freed IDs as well.  */
+  if (freed)
+    {
+      Lisp_Object tail, frame;
+
+      FOR_EACH_FRAME (tail, frame)
+	if (FRAME_IMAGE_CACHE (XFRAME (frame)) == FRAME_IMAGE_CACHE (f))
+	  SET_FRAME_GARBAGED (XFRAME (frame));
     }
 }
 
