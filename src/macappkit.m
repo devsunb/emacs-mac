@@ -1139,6 +1139,7 @@ static void init_accessibility (void);
 
 static BOOL is_action_selector (SEL);
 static BOOL is_services_handler_selector (SEL);
+static void update_action_and_services_handler_names (void);
 static NSMethodSignature *action_signature (void);
 static NSMethodSignature *services_handler_signature (void);
 static void handle_action_invocation (NSInvocation *);
@@ -10357,6 +10358,7 @@ mac_read_socket (struct terminal *terminal, struct input_event *hold_quit)
       /* Maybe these should be done at some redisplay timing.  */
       update_apple_event_handler ();
       update_dragged_types ();
+      update_action_and_services_handler_names ();
       [emacsController updateObservedKeyPaths];
 
       if (dpyinfo->saved_menu_event
@@ -13055,33 +13057,41 @@ mac_dnd_begin_drag_and_drop (struct frame *f, DragActions actions,
 			Services menu support
  ************************************************************************/
 
+/* Snapshot of the `mac-service-selection' pasteboard name; see
+   update_action_and_services_handler_names.  */
+static NSPasteboardName service_selection_pasteboard_name;
+
+/* Snapshots for -validRequestorForSendType:returnType:, which AppKit
+   calls on the GUI thread and which must answer synchronously.  */
+static BOOL service_selection_owned_p;
+static NSSetOf (NSPasteboardType) *selection_converter_data_types;
+
+/* Reads only the name snapshot, so usable on the GUI thread.  */
+
+static NSPasteboard *
+mac_service_selection_pasteboard (void)
+{
+  if (service_selection_pasteboard_name == nil)
+    return nil;
+
+  return [NSPasteboard pasteboardWithName:service_selection_pasteboard_name];
+}
+
 @implementation EmacsMainView (Services)
 
 - (id)validRequestorForSendType:(NSPasteboardType)sendType
 		     returnType:(NSPasteboardType)returnType
 {
-  Selection sel;
+  NSPasteboard *servicePboard;
 
   if ([sendType length] == 0
-      || (!NILP (Fmac_selection_owner_p (Vmac_service_selection, Qnil))
-	  && mac_get_selection_from_symbol (Vmac_service_selection, false,
-					    &sel) == noErr
-	  && sel
-	  && [(__bridge NSPasteboard *)sel availableTypeFromArray:@[sendType]]))
+      || (service_selection_owned_p
+	  && (servicePboard = mac_service_selection_pasteboard ()) != nil
+	  && [servicePboard availableTypeFromArray:@[sendType]]))
     {
-      Lisp_Object rest;
-      NSPasteboardType dataType;
-
-      if ([returnType length] == 0)
+      if ([returnType length] == 0
+	  || [selection_converter_data_types containsObject:returnType])
 	return self;
-
-      for (rest = Vselection_converter_alist; CONSP (rest);
-	   rest = XCDR (rest))
-	if (CONSP (XCAR (rest)) && SYMBOLP (XCAR (XCAR (rest)))
-	    && (dataType =
-		get_pasteboard_data_type_from_symbol (XCAR (XCAR (rest)), nil))
-	    && [dataType isEqualToString:returnType])
-	  return self;
     }
 
   return [super validRequestorForSendType:sendType returnType:returnType];
@@ -13090,18 +13100,14 @@ mac_dnd_begin_drag_and_drop (struct frame *f, DragActions actions,
 - (BOOL)writeSelectionToPasteboard:(NSPasteboard *)pboard
 			     types:(NSArrayOf (NSPasteboardType) *)types
 {
-  OSStatus err;
-  Selection sel;
-  NSPasteboard *servicePboard;
+  NSPasteboard *servicePboard = mac_service_selection_pasteboard ();
   BOOL result = NO;
 
-  err = mac_get_selection_from_symbol (Vmac_service_selection, false, &sel);
-  if (err != noErr || sel == NULL)
+  if (servicePboard == nil)
     return NO;
 
   [pboard declareTypes:@[] owner:nil];
 
-  servicePboard = (__bridge NSPasteboard *) sel;
   for (NSPasteboardType type in [servicePboard types])
     if ([types containsObject:type])
       {
@@ -13123,16 +13129,12 @@ mac_dnd_begin_drag_and_drop (struct frame *f, DragActions actions,
 static BOOL
 copy_pasteboard_to_service_selection (NSPasteboard *pboard)
 {
-  OSStatus err;
-  Selection sel;
-  NSPasteboard *servicePboard;
+  NSPasteboard *servicePboard = mac_service_selection_pasteboard ();
   BOOL result = NO;
 
-  err = mac_get_selection_from_symbol (Vmac_service_selection, true, &sel);
-  if (err != noErr || sel == NULL)
+  if (servicePboard == nil)
     return NO;
 
-  servicePboard = (__bridge NSPasteboard *) sel;
   [servicePboard declareTypes:@[] owner:nil];
   for (NSPasteboardType type in [pboard types])
     {
@@ -13153,22 +13155,21 @@ copy_pasteboard_to_service_selection (NSPasteboard *pboard)
   BOOL result = copy_pasteboard_to_service_selection (pboard);
 
   if (result)
-    {
-      OSStatus err;
-      EventRef event;
+    /* Storing the event needs the Lisp thread; the result reports
+       only the pasteboard copy.  */
+    mac_within_lisp_deferred_and_wake (^{
+	OSStatus err;
+	EventRef event;
 
-      err = CreateEvent (NULL, kEventClassService, kEventServicePaste, 0,
-			 kEventAttributeNone, &event);
-      if (err == noErr)
-	{
-	  err = mac_store_event_ref_as_apple_event (0, 0, Qservice, Qpaste,
-						    event, 0, NULL, NULL);
-	  ReleaseEvent (event);
-	}
-
-      if (err != noErr)
-	result = NO;
-    }
+	err = CreateEvent (NULL, kEventClassService, kEventServicePaste, 0,
+			   kEventAttributeNone, &event);
+	if (err == noErr)
+	  {
+	    mac_store_event_ref_as_apple_event (0, 0, Qservice, Qpaste,
+						event, 0, NULL, NULL);
+	    ReleaseEvent (event);
+	  }
+      });
 
   return result;
 }
@@ -13187,6 +13188,134 @@ copy_pasteboard_to_service_selection (NSPasteboard *pboard)
 
 @end				// NSMethodSignature (Emacs)
 
+/* Snapshots of the selector names bound under `[action]' and
+   `[service perform]' in mac-apple-event-map (default bindings
+   excluded); see update_action_and_services_handler_names.  */
+static NSSetOf (NSString *) *services_handler_names;
+static NSSetOf (NSString *) *action_names;
+
+/* Snapshot of the `mac-action-key-paths' properties, by selector
+   name.  */
+static NSDictionaryOf (NSString *, NSArrayOf (NSString *) *) *action_key_paths;
+
+#define UPDATE_HANDLER_NAMES_MIN_INTERVAL (0.1)
+
+/* Rebuild the snapshots above from the keymaps and the selection
+   state.  Called on the Lisp thread; the swap runs on the GUI thread,
+   where every AppKit reader runs, so one dispatch sees mutually
+   consistent answers.  */
+
+static void
+update_action_and_services_handler_names (void)
+{
+  static double last_update_time;
+  double now = mac_system_uptime ();
+
+  if (now - last_update_time < UPDATE_HANDLER_NAMES_MIN_INTERVAL)
+    return;
+  last_update_time = now;
+
+  Lisp_Object keymap = get_keymap (Vmac_apple_event_map, 0, 0);
+  NSMutableSetOf (NSString *) *actions = [NSMutableSet setWithCapacity:0];
+  NSMutableDictionaryOf (NSString *, NSArrayOf (NSString *) *) *keyPaths =
+    [NSMutableDictionary dictionaryWithCapacity:0];
+  NSMutableSetOf (NSString *) *handlers = [NSMutableSet setWithCapacity:0];
+
+  if (!NILP (keymap))
+    {
+      Lisp_Object map = get_keymap (access_keymap (keymap, Qaction, 0, 1),
+				    0, 0);
+
+      if (!NILP (map))
+	mac_map_keymap (map, false, ^(Lisp_Object key, Lisp_Object binding) {
+	    if (NILP (binding) || EQ (binding, Qundefined))
+	      return;
+	    if (SYMBOLP (key) && !EQ (key, Qt))
+	      {
+		NSString *selectorName =
+		  [[NSString stringWithUTF8LispString:(SYMBOL_NAME (key))]
+		    stringByAppendingString:@":"];
+		NSMutableArrayOf (NSString *) *paths =
+		  [NSMutableArray arrayWithCapacity:0];
+		Lisp_Object rest;
+
+		[actions addObject:selectorName];
+		for (rest = Fget (key, Qmac_action_key_paths); CONSP (rest);
+		     rest = XCDR (rest))
+		  if (STRINGP (XCAR (rest)))
+		    [paths addObject:
+			     [NSString stringWithUTF8LispString:(XCAR (rest))]];
+		if ([paths count])
+		  [keyPaths setObject:paths forKey:selectorName];
+	      }
+	  });
+
+      map = get_keymap (access_keymap (keymap, Qservice, 0, 1), 0, 0);
+      if (!NILP (map))
+	map = get_keymap (access_keymap (map, Qperform, 0, 1), 0, 0);
+      if (!NILP (map))
+	mac_map_keymap (map, false, ^(Lisp_Object key, Lisp_Object binding) {
+	    if (NILP (binding) || EQ (binding, Qundefined))
+	      return;
+	    if (SYMBOLP (key) && !EQ (key, Qt))
+	      [handlers addObject:
+			  [[NSString
+			     stringWithUTF8LispString:(SYMBOL_NAME (key))]
+			    stringByAppendingString:@":userData:error:"]];
+	  });
+    }
+
+  Lisp_Object pasteboard_name = Fget (Vmac_service_selection,
+				      Qmac_pasteboard_name);
+  NSPasteboardName selection_name =
+    (STRINGP (pasteboard_name)
+     ? [NSString stringWithUTF8LispString:pasteboard_name] : nil);
+  bool selection_name_changed_p =
+    !(selection_name == service_selection_pasteboard_name
+      || (selection_name != nil && service_selection_pasteboard_name != nil
+	  && [selection_name
+	       isEqualToString:service_selection_pasteboard_name]));
+
+  BOOL owned_p = !NILP (Fmac_selection_owner_p (Vmac_service_selection, Qnil));
+  NSMutableSetOf (NSPasteboardType) *dataTypes =
+    [NSMutableSet setWithCapacity:0];
+  Lisp_Object rest;
+
+  for (rest = Vselection_converter_alist; CONSP (rest); rest = XCDR (rest))
+    if (CONSP (XCAR (rest)) && SYMBOLP (XCAR (XCAR (rest))))
+      {
+	NSPasteboardType dataType =
+	  get_pasteboard_data_type_from_symbol (XCAR (XCAR (rest)), nil);
+
+	if (dataType)
+	  [dataTypes addObject:dataType];
+      }
+
+  if (action_names == nil || ![action_names isEqualToSet:actions]
+      || action_key_paths == nil
+      || ![action_key_paths isEqualToDictionary:keyPaths]
+      || services_handler_names == nil
+      || ![services_handler_names isEqualToSet:handlers]
+      || selection_name_changed_p
+      || owned_p != service_selection_owned_p
+      || selection_converter_data_types == nil
+      || ![selection_converter_data_types isEqualToSet:dataTypes])
+    mac_within_gui (^{
+	MRC_RELEASE (action_names);
+	action_names = [[NSSet alloc] initWithSet:actions];
+	MRC_RELEASE (action_key_paths);
+	action_key_paths = [[NSDictionary alloc] initWithDictionary:keyPaths
+						       copyItems:YES];
+	MRC_RELEASE (services_handler_names);
+	services_handler_names = [[NSSet alloc] initWithSet:handlers];
+	MRC_RELEASE (service_selection_pasteboard_name);
+	service_selection_pasteboard_name = [selection_name copy];
+	service_selection_owned_p = owned_p;
+	MRC_RELEASE (selection_converter_data_types);
+	selection_converter_data_types = [[NSSet alloc] initWithSet:dataTypes];
+      });
+}
+
 static BOOL
 is_services_handler_selector (SEL selector)
 {
@@ -13196,26 +13325,7 @@ is_services_handler_selector (SEL selector)
   if ([name hasSuffix:@":userData:error:"]
       && (NSMaxRange ([name rangeOfString:@":"])
 	  == [name length] - (sizeof ("userData:error:") - 1)))
-    {
-      /* Lookup the binding `[service perform MESSAGENAME]' in
-	 mac-apple-event-map.  */
-      Lisp_Object tem = get_keymap (Vmac_apple_event_map, 0, 0);
-
-      if (!NILP (tem))
-	tem = get_keymap (access_keymap (tem, Qservice, 0, 1), 0, 0);
-      if (!NILP (tem))
-	tem = get_keymap (access_keymap (tem, Qperform, 0, 1), 0, 0);
-      if (!NILP (tem))
-	{
-	  NSUInteger index = [name length] - (sizeof (":userData:error:") - 1);
-
-	  name = [name substringToIndex:index];
-	  tem = access_keymap (tem, intern (SSDATA ([name UTF8LispString])),
-			       0, 1);
-	}
-      if (!NILP (tem) && !EQ (tem, Qundefined))
-	return YES;
-    }
+    return [services_handler_names containsObject:name];
 
   return NO;
 }
@@ -13248,8 +13358,20 @@ handle_services_invocation (NSInvocation *invocation)
   /* [invocation getArgument:&error atIndex:4]; */
 
   result = copy_pasteboard_to_service_selection (pboard);
-  if (result)
-    {
+  if (!result)
+    return;
+
+  NSString *name = NSStringFromSelector ([invocation selector]);
+  NSUInteger index = [name length] - (sizeof (":userData:error:") - 1);
+
+  name = [name substringToIndex:index];
+
+  /* The invocation owns USERDATA; copy it for the deferred block.  */
+  NSString *userDataCopy = MRC_AUTORELEASE ([userData copy]);
+
+  /* Storing the event needs the Lisp thread.  NAME and USERDATACOPY
+     are immutable Foundation strings, safe to release there.  */
+  mac_within_lisp_deferred_and_wake (^{
       OSStatus err;
       EventRef event;
 
@@ -13261,28 +13383,27 @@ handle_services_invocation (NSInvocation *invocation)
 	    {kEventParamServiceMessageName, kEventParamServiceUserData};
 	  static const EventParamType types[] =
 	    {typeCFStringRef, typeCFStringRef};
-	  NSString *name = NSStringFromSelector ([invocation selector]);
-	  NSUInteger index;
-
-	  index = [name length] - (sizeof (":userData:error:") - 1);
-	  name = [name substringToIndex:index];
+	  CFStringRef name_ref = (__bridge CFStringRef) name;
 
 	  err = SetEventParameter (event, kEventParamServiceMessageName,
 				   typeCFStringRef, sizeof (CFStringRef),
-				   &name);
-	  if (err == noErr)
-	    if (userData)
+				   &name_ref);
+	  if (err == noErr && userDataCopy)
+	    {
+	      CFStringRef user_data_ref = (__bridge CFStringRef) userDataCopy;
+
 	      err = SetEventParameter (event, kEventParamServiceUserData,
 				       typeCFStringRef, sizeof (CFStringRef),
-				       &userData);
+				       &user_data_ref);
+	    }
 	  if (err == noErr)
-	    err = mac_store_event_ref_as_apple_event (0, 0, Qservice,
-						      Qperform, event,
-						      countof (names),
-						      names, types);
+	    mac_store_event_ref_as_apple_event (0, 0, Qservice,
+						Qperform, event,
+						countof (names),
+						names, types);
 	  ReleaseEvent (event);
 	}
-    }
+    });
 }
 
 static void
@@ -13320,22 +13441,7 @@ is_action_selector (SEL selector)
 
   /* The selector name is of the form `ACTIONNAME:' ?  */
   if (NSMaxRange ([name rangeOfString:@":"]) == [name length])
-    {
-      /* Lookup the binding `[action ACTIONNAME]' in
-	 mac-apple-event-map.  */
-      Lisp_Object tem = get_keymap (Vmac_apple_event_map, 0, 0);
-
-      if (!NILP (tem))
-	tem = get_keymap (access_keymap (tem, Qaction, 0, 1), 0, 0);
-      if (!NILP (tem))
-	{
-	  name = [name substringToIndex:([name length] - 1)];
-	  tem = access_keymap (tem, intern (SSDATA ([name UTF8LispString])),
-			       0, 1);
-	}
-      if (!NILP (tem) && !EQ (tem, Qundefined))
-	return YES;
-    }
+    return [action_names containsObject:name];
 
   return NO;
 }
@@ -13355,68 +13461,77 @@ action_signature (void)
   return signature;
 }
 
+/* Release on the main thread: an AppKit object must not be
+   deallocated when the deferred block dies on the Lisp thread.  */
+
 static void
-handle_action_invocation (NSInvocation *invocation)
+release_action_values (void *object)
 {
-  id __unsafe_unretained sender;
+  dispatch_async (dispatch_get_main_queue (), ^{
+      CFBridgingRelease ((CFTypeRef) object);
+    });
+}
+
+/* Whether OBJECT may be copied here and converted on the Lisp
+   thread: only Foundation value objects and property-list containers,
+   since converting an AppKit object off the main thread may touch
+   AppKit state.  Container copies are shallow.  */
+
+static bool
+mac_action_value_thread_safe_p (id object)
+{
+  if ([object isKindOfClass:NSString.class]
+      || [object isKindOfClass:NSValue.class]
+      || [object isKindOfClass:NSDate.class]
+      || [object isKindOfClass:NSData.class]
+      || [object isKindOfClass:NSURL.class])
+    return true;
+  if ([object isKindOfClass:NSArray.class]
+      || [object isKindOfClass:NSDictionary.class])
+    return [NSPropertyListSerialization
+	    propertyList:object
+	    isValidForFormat:NSPropertyListBinaryFormat_v1_0];
+  return false;
+}
+
+static void
+handle_action_invocation_with_lisp (NSString *name,
+				    NSDictionaryOf (NSString *, id) *values,
+				    Lisp_Object frame, UInt32 modifiers)
+{
   Lisp_Object arg = Qnil;
   struct input_event inev;
-  NSString *name = NSStringFromSelector ([invocation selector]);
   Lisp_Object name_symbol =
     intern (SSDATA ([[name substringToIndex:([name length] - 1)]
 		      UTF8LispString]));
-  CGEventFlags flags = (CGEventFlags) [[NSApp currentEvent] modifierFlags];
-  UInt32 modifiers = mac_cgevent_flags_to_modifiers (flags);
+  Lisp_Object rest;
 
   arg = Fcons (Fcons (build_string ("kmod"), /* kEventParamKeyModifiers */
 		      Fcons (build_string ("magn"), /* typeUInt32 */
 			     mac_four_char_code_to_string (modifiers))),
 	       arg);
 
-  [invocation getArgument:&sender atIndex:2];
+  for (rest = Fget (name_symbol, Qmac_action_key_paths);
+       CONSP (rest); rest = XCDR (rest))
+    if (STRINGP (XCAR (rest)))
+      {
+	NSString *keyPath =
+	  [NSString stringWithUTF8LispString:(XCAR (rest))];
+	id value = [values objectForKey:keyPath];
+	Lisp_Object obj;
 
-  if (sender)
-    {
-      Lisp_Object rest;
+	if (value == nil)
+	  continue;
+	obj = cfobject_to_lisp ((__bridge CFTypeRef) value,
+				CFOBJECT_TO_LISP_FLAGS_FOR_EVENT, -1);
+	arg = Fcons (Fcons (XCAR (rest),
+			    Fcons (build_string ("Lisp"), obj)),
+		     arg);
+      }
 
-      for (rest = Fget (name_symbol, Qmac_action_key_paths);
-	   CONSP (rest); rest = XCDR (rest))
-	if (STRINGP (XCAR (rest)))
-	  {
-	    NSString *keyPath;
-	    id value;
-	    Lisp_Object obj;
-
-	    keyPath = [NSString stringWithUTF8LispString:(XCAR (rest))];
-
-	    @try
-	      {
-		value = [sender valueForKeyPath:keyPath];
-	      }
-	    @catch (NSException *exception)
-	      {
-		value = nil;
-	      }
-
-	    if (value == nil)
-	      continue;
-	    obj = cfobject_to_lisp ((__bridge CFTypeRef) value,
-				    CFOBJECT_TO_LISP_FLAGS_FOR_EVENT, -1);
-	    arg = Fcons (Fcons (XCAR (rest),
-				Fcons (build_string ("Lisp"), obj)),
-			 arg);
-	  }
-
-      if ([sender isKindOfClass:NSView.class])
-	{
-	  Lisp_Object frame = [[sender window] lispFrame];
-
-	  if (!NILP (frame))
-	    arg = Fcons (Fcons (Qframe,
-				Fcons (build_string ("Lisp"), frame)),
-			 arg);
-	}
-    }
+  if (!NILP (frame))
+    arg = Fcons (Fcons (Qframe, Fcons (build_string ("Lisp"), frame)),
+		 arg);
 
   EVENT_INIT (inev);
   inev.kind = MAC_APPLE_EVENT;
@@ -13425,6 +13540,58 @@ handle_action_invocation (NSInvocation *invocation)
   inev.frame_or_window = mac_event_frame ();
   inev.arg = Fcons (build_string ("aevt"), arg);
   [emacsController storeEvent:&inev];
+}
+
+static void
+handle_action_invocation (NSInvocation *invocation)
+{
+  id __unsafe_unretained invocationSender;
+  NSString *name = NSStringFromSelector ([invocation selector]);
+  CGEventFlags flags = (CGEventFlags) [[NSApp currentEvent] modifierFlags];
+  UInt32 modifiers = mac_cgevent_flags_to_modifiers (flags);
+
+  [invocation getArgument:&invocationSender atIndex:2];
+
+  /* The sender's window is reachable only on this thread; the frame
+     object itself is safe to hand to the Lisp thread.  */
+  Lisp_Object frame = Qnil;
+
+  if ([invocationSender isKindOfClass:NSView.class])
+    frame = [[invocationSender window] lispFrame];
+
+  /* Read the `mac-action-key-paths' values here: a sender may hold
+     them only while it is sending the action.  */
+  NSMutableDictionaryOf (NSString *, id) *values =
+    [NSMutableDictionary dictionaryWithCapacity:0];
+
+  for (NSString *keyPath in [action_key_paths objectForKey:name])
+    {
+      id value;
+
+      @try
+	{
+	  value = [invocationSender valueForKeyPath:keyPath];
+	}
+      @catch (NSException *exception)
+	{
+	  value = nil;
+	}
+      if (mac_action_value_thread_safe_p (value))
+	[values setObject:MRC_AUTORELEASE ([value copy]) forKey:keyPath];
+    }
+  CFTypeRef valuesRef = CFBridgingRetain (values);
+
+  /* The deferred block must not come back to this thread (see
+     mac_within_lisp_deferred_and_wake), so everything from AppKit is
+     collected above.  */
+  mac_within_lisp_deferred_and_wake (^{
+      specpdl_ref count = SPECPDL_INDEX ();
+
+      record_unwind_protect_ptr (release_action_values, (void *) valuesRef);
+      handle_action_invocation_with_lisp (name, (__bridge id) valuesRef,
+					  frame, modifiers);
+      unbind_to (count, Qnil);
+    });
 }
 
 bool
