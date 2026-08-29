@@ -16905,8 +16905,12 @@ static dispatch_semaphore_t mac_gui_semaphore, mac_lisp_semaphore;
 static NSMutableArray *mac_gui_queue, *mac_lisp_queue;
 
 /* Queues of blocks to be executed in Lisp thread at the end of the
-   call to mac_within_gui_and_here.  */
+   call to mac_within_gui_and_here.  The GUI thread appends while a
+   Lisp thread may be swapping the array out (after mac_within_lisp
+   the GUI thread runs on while the Lisp thread drains), so both take
+   mac_deferred_lisp_queue_lock around the pointer.  */
 static NSMutableArray *mac_deferred_lisp_queue;
+static pthread_mutex_t mac_deferred_lisp_queue_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Dispatch source to break the run loop in the GUI thread for the
    select emulation.  */
@@ -17018,11 +17022,19 @@ mac_within_gui_and_here (void (^block_gui) (void),
   if (block_here)
     block_here ();
   dispatch_semaphore_wait (mac_lisp_semaphore, DISPATCH_TIME_FOREVER);
-  if (mac_deferred_lisp_queue.count)
+  for (;;)
     {
-      NSMutableArray *queue = mac_deferred_lisp_queue;
+      NSMutableArray *queue;
+      NSUInteger count;
 
-      mac_deferred_lisp_queue = [[NSMutableArray alloc] initWithCapacity:0];
+      pthread_mutex_lock (&mac_deferred_lisp_queue_lock);
+      queue = mac_deferred_lisp_queue;
+      count = queue.count;
+      if (count)
+	mac_deferred_lisp_queue = [[NSMutableArray alloc] initWithCapacity:0];
+      pthread_mutex_unlock (&mac_deferred_lisp_queue_lock);
+      if (count == 0)
+	break;
       do
 	{
 	  void (^block) (void) = [queue dequeue];
@@ -17031,7 +17043,6 @@ mac_within_gui_and_here (void (^block_gui) (void),
 	}
       while (queue.count);
       MRC_RELEASE (queue);
-      eassert (mac_deferred_lisp_queue.count == 0);
     }
 }
 
@@ -17089,7 +17100,9 @@ mac_within_lisp_deferred (void (^block) (void))
   eassert (pthread_main_np ());
   eassert (block);
 
+  pthread_mutex_lock (&mac_deferred_lisp_queue_lock);
   [mac_deferred_lisp_queue enqueue:(MRC_AUTORELEASE ([block copy]))];
+  pthread_mutex_unlock (&mac_deferred_lisp_queue_lock);
 }
 
 /* Ask execution of BLOCK to the Lisp thread.  Process BLOCK
