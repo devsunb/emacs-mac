@@ -462,6 +462,30 @@ timerfd_callback (int fd, void *arg)
 
 #endif /* HAVE_TIMERFD */
 
+/* Which of the signals blocked by block_atimers were not blocked
+   before, for the argument of unblock_atimers_on_unwind.  */
+
+enum { ATIMER_UNBLOCK_ALRM = 1, ATIMER_UNBLOCK_INT = 2 };
+
+/* Unwind cleanup installed by do_pending_atimers.  Unblocks the
+   signals named by ARG instead of restoring a saved mask:
+   quit_throw_to_read_char longjmps out of that frame before read_char
+   unwinds the specpdl, and by then read_char has emptied the mask on
+   purpose.  */
+
+static void
+unblock_atimers_on_unwind (int arg)
+{
+  sigset_t unblocked;
+
+  sigemptyset (&unblocked);
+  if (arg & ATIMER_UNBLOCK_ALRM)
+    sigaddset (&unblocked, SIGALRM);
+  if (arg & ATIMER_UNBLOCK_INT)
+    sigaddset (&unblocked, SIGINT);
+  pthread_sigmask (SIG_UNBLOCK, &unblocked, 0);
+}
+
 /* Do pending timers.  */
 
 void
@@ -469,10 +493,25 @@ do_pending_atimers (void)
 {
   if (atimers)
     {
+      specpdl_ref count = SPECPDL_INDEX ();
       sigset_t oldset;
-      block_atimers (&oldset);
+      int unblock_on_unwind = 0;
+
+      /* Record the cleanup before blocking: growing the specpdl can
+	 signal, and the mask must not stay blocked with nothing to
+	 restore it.  OLDSET is read here, so block_atimers gets no
+	 mask pointer.  */
+      pthread_sigmask (SIG_BLOCK, 0, &oldset);
+      if (!sigismember (&oldset, SIGALRM))
+	unblock_on_unwind |= ATIMER_UNBLOCK_ALRM;
+      if (!sigismember (&oldset, SIGINT))
+	unblock_on_unwind |= ATIMER_UNBLOCK_INT;
+      record_unwind_protect_int (unblock_atimers_on_unwind,
+				 unblock_on_unwind);
+
+      block_atimers (NULL);
       run_timers ();
-      unblock_atimers (&oldset);
+      unbind_to (count, Qnil);
     }
 }
 
