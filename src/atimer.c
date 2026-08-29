@@ -379,6 +379,25 @@ schedule_atimer (struct atimer *t)
   t->next = a;
 }
 
+#ifdef DARWIN_OS
+/* Return the one-shot timer ARG to the free list; unwind cleanup
+   installed by run_timers.  */
+
+static void
+free_atimer_on_unwind (void *arg)
+{
+  struct atimer *t = arg;
+  sigset_t oldset;
+
+  /* On the quit path read_char empties the mask before unwinding the
+     specpdl, so this can run with SIGALRM open.  */
+  block_atimers (&oldset);
+  t->next = free_atimers;
+  free_atimers = t;
+  unblock_atimers (&oldset);
+}
+#endif
+
 static void
 run_timers (void)
 {
@@ -387,7 +406,18 @@ run_timers (void)
   while (atimers && timespec_cmp (atimers->expiration, now) <= 0)
     {
       struct atimer *t = atimers;
+#ifdef DARWIN_OS
+      specpdl_ref count = SPECPDL_INDEX ();
+#endif
       atimers = atimers->next;
+#ifdef DARWIN_OS
+      /* Darwin runs the callback after T is unlinked, so a one-shot T
+	 reaches the free list only from the unwind, after the callback
+	 returns.  Register after unlinking: the entry is unwound even
+	 when the specpdl cannot grow.  */
+      if (t->type != ATIMER_CONTINUOUS)
+	record_unwind_protect_ptr (free_atimer_on_unwind, t);
+#endif
 #ifndef DARWIN_OS
       t->fn (t);
 #endif
@@ -397,14 +427,17 @@ run_timers (void)
 	  t->expiration = timespec_add (now, t->interval);
 	  schedule_atimer (t);
 	}
+#ifndef DARWIN_OS
       else
 	{
 	  t->next = free_atimers;
 	  free_atimers = t;
 	}
+#endif
 #ifdef DARWIN_OS
       /* Fix for Ctrl-G.  Perhaps this should apply to all platforms. */
       t->fn (t);
+      unbind_to (count, Qnil);
 #endif
     }
 
