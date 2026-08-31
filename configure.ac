@@ -23,7 +23,7 @@ dnl  along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.
 
 AC_PREREQ([2.65])
 dnl Note this is parsed by (at least) make-dist and lisp/cedet/ede/emacs.el.
-AC_INIT([GNU Emacs], [31.0.50], [bug-gnu-emacs@gnu.org], [],
+AC_INIT([GNU Emacs], [32.0.50], [bug-gnu-emacs@gnu.org], [],
   [https://www.gnu.org/software/emacs/])
 
 if test "$XCONFIGURE" = "android"; then
@@ -979,7 +979,7 @@ a valid path to android.jar.  See config.log for more details.])
   fi
 
   AC_CACHE_CHECK([whether android.jar is new enough],
-    [emacs_cv_android_w_or_later],
+    [emacs_cv_android_x_or_later],
     AS_IF([rm -f conftest.class
 cat << EOF > conftest.java
 
@@ -987,7 +987,7 @@ import android.os.Build;
 
 class conftest
 {
-  private static int test = Build.VERSION_CODES.BAKLAVA;
+  private static int test = Build.VERSION_CODES.CINNAMON_BUN;
 }
 
 EOF
@@ -998,7 +998,7 @@ EOF
 
   if test "$emacs_cv_android_w_or_later" = "no"; then
     AC_MSG_ERROR([Emacs must be built with an android.jar file produced for \
-Android 16 (BAKLAVA) or later.])
+Android 17 (CINNAMON_BUN) or later.])
   fi
 
   dnl See if the Java compiler supports the `--release' option which
@@ -1628,6 +1628,10 @@ AC_DEFUN([gt_TYPE_WINT_T],
 AC_DEFUN([gl_TYPE_OFF64_T],
   [HAVE_OFF64_T=1
    AC_SUBST([HAVE_OFF64_T])])
+# Emacs does not want Gnulib's fixes for glibc bug 20381 or for
+# Unicode-compatible case matching, as that brings in too many Gnulib files.
+AC_DEFINE([_REGEX_AVOID_UCHAR_H], [1],
+  [Define to 1 so that the Gnulib regex module does not use Gnulib uchar-h.])
 
 # Initialize gnulib right after choosing the compiler.
 dnl Amongst other things, this sets AR and ARFLAGS.
@@ -2116,44 +2120,7 @@ if test $opsys = darwin; then
   AC_PATH_PROG([HAVE_MACPORTS], [port])
 fi
 
-## Require makeinfo >= 4.13 (last of the 4.x series) to build the manuals.
-: ${MAKEINFO:=makeinfo}
-case `($MAKEINFO --version) 2>/dev/null` in
-  *' (GNU texinfo) '4.1[[3-9]]* | \
-  *' (GNU texinfo) '[[5-9]]* | \
-  *' (GNU texinfo) '[[1-9][0-9]]* ) ;;
-  *) MAKEINFO=no;;
-esac
-
-## Makeinfo is unusual.  For a released Emacs, the manuals are
-## pre-built, and not deleted by the normal clean rules.  makeinfo is
-## therefore in the category of "special tools" not normally required, which
-## configure does not have to check for (eg autoconf itself).
-## In a repository checkout on the other hand, the manuals are not included.
-## So makeinfo is a requirement to build from the repository, and configure
-## should test for it as it does for any other build requirement.
-## We use the presence of $srcdir/info/emacs to distinguish a release,
-## with pre-built manuals, from a repository checkout.
-if test "$MAKEINFO" = "no"; then
-  MAKEINFO=makeinfo
-  if test ! -e "$srcdir/info/emacs" && test ! -e "$srcdir/info/emacs.info"; then
-    AC_MSG_ERROR( [You do not seem to have makeinfo >= 4.13, and your
-source tree does not seem to have pre-built manuals in the 'info' directory.
-Please install a suitable version of makeinfo.] )
-  else
-    AC_MSG_WARN( [You do not seem to have makeinfo >= 4.13.
-You will not be able to rebuild the manuals if you delete them or change
-their sources.] )
-  fi
-fi
-AC_SUBST([MAKEINFO])
-
-if test $opsys = mingw32; then
-   DOCMISC_W32=efaq-w32
-else
-   DOCMISC_W32=
-fi
-AC_SUBST([DOCMISC_W32])
+gl_TEXINFO
 
 dnl Add our options to ac_link now, after it is set up.
 
@@ -5182,6 +5149,7 @@ AC_SUBST_FILE([module_env_snippet_28])
 AC_SUBST_FILE([module_env_snippet_29])
 AC_SUBST_FILE([module_env_snippet_30])
 AC_SUBST_FILE([module_env_snippet_31])
+AC_SUBST_FILE([module_env_snippet_32])
 module_env_snippet_25="$srcdir/src/module-env-25.h"
 module_env_snippet_26="$srcdir/src/module-env-26.h"
 module_env_snippet_27="$srcdir/src/module-env-27.h"
@@ -5189,6 +5157,7 @@ module_env_snippet_28="$srcdir/src/module-env-28.h"
 module_env_snippet_29="$srcdir/src/module-env-29.h"
 module_env_snippet_30="$srcdir/src/module-env-30.h"
 module_env_snippet_31="$srcdir/src/module-env-31.h"
+module_env_snippet_32="$srcdir/src/module-env-32.h"
 emacs_major_version=`AS_ECHO([$PACKAGE_VERSION]) | sed 's/[[.]].*//'`
 AC_SUBST([emacs_major_version])
 
@@ -5258,19 +5227,6 @@ You can find the instructions on how to compile and install libgccjit from
 source on this site:
 <https://gcc.gnu.org/wiki/JIT>.])])
 
-HAVE_NATIVE_COMP=no
-LIBGCCJIT_LIBS=
-LIBGCCJIT_CFLAGS=
-if test "$canonical" = i686-pc-cygwin; then
-  if test "${with_cygwin32_native_compilation}" = yes; then
-    with_native_compilation=yes
-  elif test "${with_native_compilation}" != no; then
-    AC_MSG_ERROR([Native compilation is not supported on 32-bit Cygwin.
-If you really want to try it anyway, use the configure option
-'--with-cygwin32-native-compilation'.])
-  fi
-fi
-
 AC_DEFUN([libgccjit_not_found], [
   AC_MSG_WARN([Elisp native compiler can't be enabled as libgccjit was not
 found.
@@ -5304,30 +5260,25 @@ source on this site:
 
   with_native_compilation=no])
 
+HAVE_NATIVE_COMP=no
+LIBGCCJIT_LIBS=
+LIBGCCJIT_CFLAGS=
+if test "$canonical" = i686-pc-cygwin; then
+  if test "${with_cygwin32_native_compilation}" = yes; then
+    with_native_compilation=yes
+  elif test "${with_native_compilation}" != no; then
+    AC_MSG_ERROR([Native compilation is not supported on 32-bit Cygwin.
+If you really want to try it anyway, use the configure option
+'--with-cygwin32-native-compilation'.])
+  fi
+fi
+
 if test "$with_features" = "no" \
    && test "${with_native_compilation}" = "default"; then
   with_native_compilation=no
 fi
 
-if test "${with_native_compilation}" = "default"; then
-    # Check if libgccjit is available.
-    AC_CHECK_LIB([gccjit], [gcc_jit_context_acquire],
-      [], [libgccjit_not_found])
-    AC_CHECK_HEADERS([libgccjit.h], [], [libgccjit_dev_not_found])
-    if test "${with_native_compilation}" != "no"; then
-      # Check if libgccjit really works.
-      AC_RUN_IFELSE([libgccjit_smoke_test], [], [libgccjit_broken])
-    fi
-fi
-
 if test "${with_native_compilation}" != "no"; then
-    if test "${HAVE_ZLIB}" = no; then
-       AC_MSG_ERROR(['--with-native-compilation' requires zlib])
-    fi
-
-    SAVE_CFLAGS=$CFLAGS
-    SAVE_LIBS=$LIBS
-
     if test "${opsys}" = "darwin"; then
       # Ensure libgccjit installed by Homebrew or macports can be found.
       if test -n "$BREW"; then
@@ -5364,15 +5315,38 @@ if test "${with_native_compilation}" != "no"; then
       fi
     fi
 
-    # In the default case we already checked
-    if test "${with_native_compilation}" != "default"; then
-      # Check if libgccjit is available.
-      AC_CHECK_LIB([gccjit], [gcc_jit_context_acquire],
-        [], [libgccjit_not_found_err])
-      AC_CHECK_HEADERS([libgccjit.h], [], [libgccjit_dev_not_found_err])
+    # Check if libgccjit is available.
+    native_compilation_requested=${with_native_compilation}
+    AC_CHECK_LIB([gccjit], [gcc_jit_context_acquire], [],
+        [if test "${native_compilation_requested}" = "default"; then
+	   libgccjit_not_found
+	 else
+	   libgccjit_not_found_err
+	 fi])
+    AC_CHECK_HEADERS([libgccjit.h], [],
+        [if test "${native_compilation_requested}" = "default"; then
+	   libgccjit_dev_not_found
+	 else
+	   libgccjit_dev_not_found_err
+	 fi])
+    if test "${with_native_compilation}" != "no"; then
       # Check if libgccjit really works.
-      AC_RUN_IFELSE([libgccjit_smoke_test], [], [libgccjit_broken_err])
+      AC_RUN_IFELSE([libgccjit_smoke_test], [],
+        [if test "${native_compilation_requested}" = "default"; then
+           libgccjit_broken
+	 else
+           libgccjit_broken_err
+         fi])
     fi
+fi
+
+if test "${with_native_compilation}" != "no"; then
+    if test "${HAVE_ZLIB}" = no; then
+       AC_MSG_ERROR(['--with-native-compilation' requires zlib])
+    fi
+
+    SAVE_CFLAGS=$CFLAGS
+    SAVE_LIBS=$LIBS
     HAVE_NATIVE_COMP=yes
     case "${opsys}" in
       # mingw32 loads the library dynamically.
@@ -7407,6 +7381,8 @@ AC_SUBST([LIBXT_OTHER])
 if test "${HAVE_X11}" = "yes" ; then
   AC_DEFINE([HAVE_X11], [1],
 	    [Define to 1 if you want to use version 11 of X windows.])
+  AC_DEFINE([_CONST_X_STRING], [1],
+    [Define to 1 for X11 headers to use the 'const' keyword of C89 or later.])
   LIBX_OTHER="\$(LIBXT) \$(LIBX_EXTRA)"
 else
   LIBX_OTHER=
@@ -8086,10 +8062,10 @@ if test "$XCONFIGURE" != "android"; then
   AS_MKDIR_P([cross/etc])
 
   AS_IF([test "x$with_android" != "xno"], [
-    dnl Link gnulib files to cross/lib as well.  af_alg.h and
-    dnl lib/save-cwd.h are copied manually from gnulib, and as such
-    dnl aren't specified in gl_FILE_LIST.
-    emacs_files='gl_FILE_LIST lib/af_alg.h lib/save-cwd.h'
+    dnl Link gnulib files to cross/lib as well.
+    dnl lib/save-cwd.h is copied manually from gnulib,
+    dnl and as such isn't specified in gl_FILE_LIST.
+    emacs_files='gl_FILE_LIST lib/save-cwd.h'
     dnl These files are specific to Emacs.
     emacs_files="$emacs_files lib/fingerprint.c lib/fingerprint.h \
 		   lib/save-cwd.c lib/openat-die.c lib/save-cwd.c \

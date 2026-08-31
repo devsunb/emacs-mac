@@ -92,11 +92,11 @@
              `(,(expand-file-name invocation-name invocation-directory)
                "-Q" "--batch" "--eval"
                ,(prin1-to-string
-                 `(progn (setq kill-emacs-on-sigint nil)
-                         (message "Ready!")
-                         (condition-case nil
-                             (dotimes (_ 3) (sit-for 1))
-                           (quit (message "%s" ,exit-msg)))))))))
+                 `(condition-case nil
+                      (progn (setq kill-emacs-on-sigint nil)
+                             (message "Ready!")
+                             (sleep-for 3))
+                    (quit (message "%s" ,exit-msg))))))))
       (while (progn (accept-process-output proc 1.0)
                     (goto-char (point-min))
                     (not (re-search-forward "Ready!" nil t)))
@@ -475,6 +475,21 @@ even if `input-decode-map' has not yet scanned the tail."
     (define-key map [?\C-c ?x] 'ignore)
     (keyboard-tests--rks-execute (list ?\C-c ?\C-h) map)
     (should called)))
+
+(ert-deftest keyboard-tests-keymap-property ()
+  "Test `describe-key' when keymap is a text property."
+  (defvar-keymap my-test-map "<f5>" #'forward-line)
+  (with-temp-buffer
+    (pop-to-buffer (current-buffer))
+    (save-excursion (insert "hello world"))
+    (put-text-property (point-min) (point-max) 'keymap my-test-map)
+    (describe-key (list (cons (kbd "<f5>") (kbd "<f5>"))))
+    (with-current-buffer "*Help*"
+      (goto-char (point-min))
+      (should (string-match-p "(found in my-test-map)"
+                              (buffer-substring
+                               (line-beginning-position)
+                               (line-end-position)))))))
 
 (provide 'keyboard-tests)
 ;;; keyboard-tests.el ends here

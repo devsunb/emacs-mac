@@ -74,6 +74,7 @@ char *w32_getenv (const char *);
 #include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdckdint.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -146,8 +147,9 @@ static char const *socket_name;
 /* If non-NULL, the filename of the authentication file.  */
 static char const *server_file;
 
-/* Seconds to wait before timing out (0 means wait forever).  */
-static uintmax_t timeout;
+/* Seconds to wait before timing out.  Negative means no --timeout so
+   use DEFAULT_TIMEOUT, 0 means wait forever.  */
+static intmax_t timeout = -1;
 
 /* If non-NULL, the tramp prefix emacs must use to find the files.  */
 static char const *tramp_prefix;
@@ -539,10 +541,8 @@ decode_options (int argc, char **argv)
 	  break;
 
 	case 'w':
-	  timeout = strtoumax (optarg, &endptr, 10);
-	  if (timeout <= 0 ||
-	      ((timeout == INTMAX_MAX || timeout == INTMAX_MIN)
-	       && errno == ERANGE))
+	  timeout = strtoimax (optarg, &endptr, 10);
+	  if (timeout < 0 || endptr == optarg || *endptr)
 	    {
 	      fprintf (stderr, "Invalid timeout: \"%s\"\n", optarg);
 	      exit (EXIT_FAILURE);
@@ -745,34 +745,45 @@ fail (void)
       ptrdiff_t toks = 0;
 
       /* Unpack alternate_editor's space-separated tokens into new_argv.  */
-      for (char *tok = s; tok != NULL && *tok != '\0';)
+      for (char *tok = s;;)
         {
+	  /* Skip leading delimiters, and set separator, skipping any
+	     opening quote.  Break out of loop if no remaining tokens.  */
+	  while (*tok == ' ')
+	    tok++;
+	  if (!*tok)
+	    break;
+	  char sep = ' ';
+	  if (*tok == '"')
+	    {
+	      tok++;
+	      sep = '"';
+	    }
+
           /* Allocate new token.  */
           ++toks;
           new_argv = xrealloc (new_argv,
 			       new_argv_size + toks * sizeof (char *));
-
-          /* Skip leading delimiters, and set separator, skipping any
-             opening quote.  */
-          size_t skip = strspn (tok, " \"");
-          tok += skip;
-          char sep = (skip > 0 && tok[-1] == '"') ? '"' : ' ';
 
           /* Record start of token.  */
           new_argv[toks - 1] = tok;
 
           /* Find end of token and overwrite it with NUL.  */
           tok = strchr (tok, sep);
-          if (tok != NULL)
-            *tok++ = '\0';
+	  if (!tok)
+	    break;
+	  *tok++ = '\0';
         }
 
-      /* Append main_argv arguments to new_argv.  */
-      memcpy (&new_argv[toks], main_argv + optind, extra_args_size);
+      if (toks)
+	{
+	  /* Append main_argv arguments to new_argv.  */
+	  memcpy (&new_argv[toks], main_argv + optind, extra_args_size);
 
-      execvp (*new_argv, new_argv);
-      message (true, "%s: error executing alternate editor \"%s\"\n",
-	       progname, alternate_editor);
+	  execvp (*new_argv, new_argv);
+	  message (true, "%s: error executing alternate editor \"%s\": %s\n",
+		   progname, alternate_editor, strerror (errno));
+	}
     }
   exit (EXIT_FAILURE);
 }
@@ -904,7 +915,7 @@ quote_argument_len (HSOCKET s, const char *str, ptrdiff_t len)
 static void
 quote_argument (HSOCKET s, const char *str)
 {
-  return quote_argument_len (s, str, strlen (str));
+  quote_argument_len (s, str, strlen (str));
 }
 
 /* The inverse of quote_argument.  Remove quoting in string STR by
@@ -1036,10 +1047,12 @@ get_server_config (const char *config_file, struct sockaddr_in *server,
       exit (EXIT_FAILURE);
     }
 
-  memset (server, 0, sizeof *server);
-  server->sin_family = AF_INET;
-  server->sin_addr.s_addr = inet_addr (dotted);
-  server->sin_port = htons (atoi (port));
+  *server = (struct sockaddr_in)
+    {
+      .sin_family = AF_INET,
+      .sin_addr.s_addr = inet_addr (dotted),
+      .sin_port = htons (atoi (port))
+    };
   free (dotted);
 
   if (! fread (authentication, AUTH_KEY_LENGTH, 1, config))
@@ -1952,28 +1965,30 @@ start_daemon_and_retry_set_socket (void)
   return emacs_socket;
 }
 
+/* Set SOCKET's timeout to SECONDS.
+   If SECONDS is zero or out of range, do not set the timeout.
+   Silently ignore errors, as POSIX says it is implementation-defined as
+   to whether SO_RCVTIMEO works.  Although we could fall back on
+   non-blocking I/O if setsockopt fails, it's not worth the trouble.  */
 static void
-set_socket_timeout (HSOCKET socket, int seconds)
+set_socket_timeout (HSOCKET socket, intmax_t seconds)
 {
-  int ret;
+  if (seconds <= 0)
+    return;
 
 #ifndef WINDOWSNT
   struct timeval timeout;
-  timeout.tv_sec = seconds;
+  if (ckd_add (&timeout.tv_sec, seconds, 0))
+    return;
   timeout.tv_usec = 0;
-  ret = setsockopt (socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
+  setsockopt (socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
 #else
   DWORD timeout;
 
-  if (seconds > INT_MAX / 1000)
-    timeout = INT_MAX;
-  else
-    timeout = seconds * 1000;
-  ret = setsockopt (socket, SOL_SOCKET, SO_RCVTIMEO, (char *) &timeout, sizeof timeout);
+  if (ckd_mul (&timeout, seconds, 1000))
+    return;
+  setsockopt (socket, SOL_SOCKET, SO_RCVTIMEO, (char *) &timeout, sizeof timeout);
 #endif
-
-  if (ret < 0)
-    sock_err_message ("setsockopt");
 }
 
 static bool
@@ -2210,7 +2225,7 @@ main (int argc, char **argv)
     }
   fflush (stdout);
 
-  set_socket_timeout (emacs_socket, timeout > 0 ? timeout : DEFAULT_TIMEOUT);
+  set_socket_timeout (emacs_socket, timeout < 0 ? DEFAULT_TIMEOUT : timeout);
   bool saw_response = false;
   ptrdiff_t nrecv = 0;
 
@@ -2236,7 +2251,7 @@ main (int argc, char **argv)
 	      if (timeout > 0)
 		{
 		  /* Don't retry if we were given a --timeout flag.  */
-		  fprintf (stderr, "\nServer not responding; timed out after %ju seconds",
+		  fprintf (stderr, "\nServer not responding; timed out after %jd seconds",
 			   timeout);
 		  retry = false;
 		}
@@ -2295,7 +2310,7 @@ main (int argc, char **argv)
             }
           else if (strprefix ("-print ", p))
             {
-              /* -print STRING: Print STRING, preceeded by a newline, on
+              /* -print STRING: Print STRING, preceded by a newline, on
                   the terminal. */
 	      if (!suppress_output)
 		{
@@ -2308,7 +2323,7 @@ main (int argc, char **argv)
           else if (strprefix ("-print-nonl ", p))
             {
               /* -print-nonl STRING: Print STRING on the terminal
-                 without a preceding newlin.  Used to continue a
+                 without a preceding newline.  Used to continue a
                  preceding -print command.  Nowadays used only for
                  servers in Emacs versions before 31.  */
 	      if (!suppress_output)

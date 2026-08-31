@@ -2756,7 +2756,7 @@ delete_frame (Lisp_Object frame, Lisp_Object force)
 	{
 	  frame1 = Qnil;
 
-	  if (after_delete_frame_select_mru_frame
+	  if (EQ (delete_frame_choose_selected, Qmru)
 	      && !EQ (force, Qnoelisp))
 	    {
 	      /* Find the most recently used visible frame among all
@@ -5099,7 +5099,7 @@ handle_frame_param (struct frame *f, Lisp_Object prop, Lisp_Object val,
 		    Lisp_Object old_value)
 {
   Lisp_Object param_index = Fget (prop, Qx_frame_parameter);
-  if (FIXNATP (param_index) && XFIXNAT (param_index) < ARRAYELTS (frame_parms))
+  if (FIXNATP (param_index) && XFIXNAT (param_index) < countof (frame_parms))
     {
       if (FRAME_RIF (f))
 	{
@@ -5476,7 +5476,7 @@ gui_report_frame_params (struct frame *f, Lisp_Object *alistptr)
      E.g., on MS-Windows it returns a value whose type is HANDLE,
      which is actually a pointer.  Explicit casting avoids compiler
      warnings.  */
-  w = (uintptr_t) FRAME_NATIVE_WINDOW (f);
+  w = WINDOW_HANDLE_UINTPTR (FRAME_NATIVE_WINDOW (f));
   store_in_alist (alistptr, Qwindow_id,
 		  make_formatted_string ("%"PRIuMAX, w));
 #ifdef HAVE_X_WINDOWS
@@ -5484,7 +5484,7 @@ gui_report_frame_params (struct frame *f, Lisp_Object *alistptr)
   /* Tooltip frame may not have this widget.  */
   if (FRAME_X_OUTPUT (f)->widget)
 #endif
-    w = (uintptr_t) FRAME_OUTER_WINDOW (f);
+    w = WINDOW_HANDLE_UINTPTR (FRAME_OUTER_WINDOW (f));
   store_in_alist (alistptr, Qouter_window_id,
 		  make_formatted_string ("%"PRIuMAX, w));
 #endif
@@ -5498,7 +5498,8 @@ gui_report_frame_params (struct frame *f, Lisp_Object *alistptr)
   if (FRAME_OUTPUT_DATA (f)->parent_desc == FRAME_DISPLAY_INFO (f)->root_window)
     tem = Qnil;
   else
-    tem = make_fixed_natnum ((uintptr_t) FRAME_OUTPUT_DATA (f)->parent_desc);
+    tem = make_fixed_natnum (WINDOW_HANDLE_UINTPTR
+			     (FRAME_OUTPUT_DATA (f)->parent_desc));
   store_in_alist (alistptr, Qexplicit_name, (f->explicit_name ? Qt : Qnil));
   store_in_alist (alistptr, Qparent_id, tem);
   store_in_alist (alistptr, Qtool_bar_position, FRAME_TOOL_BAR_POSITION (f));
@@ -7247,6 +7248,7 @@ syms_of_frame (void)
   DEFSYM (Qframe_monitor_attributes, "frame-monitor-attributes");
   DEFSYM (Qwindow__pixel_to_total, "window--pixel-to-total");
   DEFSYM (Qmake_initial_minibuffer_frame, "make-initial-minibuffer-frame");
+  DEFSYM (Qmru, "mru");
   DEFSYM (Qget_mru_frame, "get-mru-frame");
   DEFSYM (Qexplicit_name, "explicit-name");
   DEFSYM (Qheight, "height");
@@ -7413,10 +7415,10 @@ syms_of_frame (void)
   DEFSYM (Qcloned_from, "cloned-from");
   DEFSYM (Qundeleted, "undeleted");
 
-  for (int i = 0; i < ARRAYELTS (frame_parms); i++)
+  for (int i = 0; i < countof (frame_parms); i++)
     {
       int sym = frame_parms[i].sym;
-      eassert (sym >= 0 && sym < ARRAYELTS (lispsym));
+      eassert (sym >= 0 && sym < countof (lispsym));
       Lisp_Object v = builtin_lisp_symbol (sym);
       Fput (v, Qx_frame_parameter, make_fixnum (i));
     }
@@ -7823,12 +7825,13 @@ The default is \\+`inhibit' in NS builds and nil everywhere else.  */);
   alter_fullscreen_frames = Qnil;
 #endif
 
-  DEFVAR_BOOL ("after-delete-frame-select-mru-frame",
-	       after_delete_frame_select_mru_frame,
-	       doc: /* Non-nil means `delete-frame' selects most recently used frame.
+  DEFVAR_LISP ("delete-frame-choose-selected",
+	       delete_frame_choose_selected,
+	       doc: /* What frame to select after frame deletion.
+The value `mru' means `delete-frame' selects most recently used frame.
 If this is nil, `delete-frame' will select the oldest visible frame on
 the same terminal.  */);
-  after_delete_frame_select_mru_frame = true;
+  delete_frame_choose_selected = Qmru;
 
   defsubr (&Sframe_id);
   defsubr (&Sframep);

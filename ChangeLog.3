@@ -3149,7 +3149,7 @@
 
 	Remove mention of removed `gnus-treat-play-sounds' variable from manual
 
-	* info/gnus.info: Remove `gnus-treat-play-sounds' from
+	* doc/misc/gnus.texi: Remove `gnus-treat-play-sounds' from
 	manual. According to lisp/gnus/ChangeLog.3 this variable was
 	removed in 2010 (bug#53192).
 
@@ -15670,7 +15670,7 @@
 	* lisp/progmodes/cc-mode.el (c-depropertize-CPP): Test for general ml strings
 	rather than C++ raw strings.
 	(c-unescaped-nls-in-string-p): Handle languages with ml strings.
-	(c-clear-string-fences): Fix bug with wrong parenthesisation.
+	(c-clear-string-fences): Fix bug with wrong parenthesization.
 	(c-before-change-check-unbalanced-strings)
 	(c-after-change-mark-abnormal-strings, c-after-change-escape-NL-in-string):
 	Adapt for multi-line strings.
@@ -17441,7 +17441,7 @@
 
 2021-07-30  Mattias Engdegård  <mattiase@acm.org>
 
-	Simplify lexical let-optimisations
+	Simplify lexical let-optimizations
 
 	Ensure in cconv that let-bindings have the normal form (VAR EXPR)
 	where VAR is a valid variable name, so that we don't need to keep
@@ -46460,7 +46460,7 @@
 
 	* lisp/subr.el (ctl-x-map): Initialize inside the declaration.
 
-	* src/command.h (control_x_map):
+	* src/commands.h (control_x_map):
 	* src/keymap.c (control_x_map): Delete variable.
 	(syms_of_keymap):
 	* src/keyboard.c (keys_of_keyboard):
@@ -57196,7 +57196,7 @@
 
 	* lisp/progmodes/compile.el (compilation-error-regexp-alist-alist):
 	'javac': Column numbers are 1-based by default; remove subtraction and
-	η-reduce.  Translate regexp to rx (mechanised).
+	η-reduce.  Translate regexp to rx (mechanized).
 	* test/lisp/progmodes/compile-tests.el (compile-tests--test-regexps-data):
 	Adapt 'javac' test cases to the change.
 

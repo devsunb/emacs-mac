@@ -93,13 +93,6 @@
 
 (require 'erc)
 
-(eval-when-compile (require 'erc-join)
-                   (require 'erc-services)
-                   (require 'erc-fill))
-
-(declare-function erc-network "erc-networks")
-(defvar erc-network)
-
 (defvar erc-scenarios-common--resources-dir
   (expand-file-name "../" (ert-resource-directory)))
 
@@ -149,76 +142,96 @@
       (auth-source-do-cache nil)
       (timer-list (copy-sequence timer-list))
       (timer-idle-list (copy-sequence timer-idle-list))
-      (erc-auth-source-parameters-join-function nil)
+      ;; This binding exists to protect the default value because ERC
+      ;; adds all joined channels automatically.
       (erc-autojoin-channels-alist nil)
       (erc-server-auto-reconnect nil)
       (erc-after-connect nil)
       (erc-last-input-time 0)
       (erc-d-linger-secs 10)
+      ;; This buffer, if created by `erc--lwarn', will be killed before
+      ;; `erc-scenarios-common-with-cleanup' exits.
+      (erc--warnings-buffer-name  "*ERC test warnings*")
       ,@bindings)))
 
 (defmacro erc-scenarios-common-with-cleanup (bindings &rest body)
   "Provide boilerplate cleanup tasks after calling BODY with BINDINGS.
+Shadow various options and variables used by ERC with values more
+suitable for test purposes.  These can be overridden in the \"varlist\"
+BINDINGS.  Upon exiting, kill buffers and delete processes created by
+ERC, as well as any bound to variables in BINDINGS.  However, adding
+items not referenced in BODY for this purpose alone can confuse readers.
 
-If an `erc-d' process exists, wait for it to start before running BODY.
-If `erc-autojoin-mode' mode is bound, restore it during cleanup if
-disabled by BODY.  Other defaults common to these test cases are added
-below and can be overridden, except when wanting the \"real\" default
-value, which must be looked up or captured outside of the calling form.
+Avoid taking special care to restore the effect of activating global
+modules in BODY.  However, as a special case, if the variable
+`erc-autojoin-mode' mode is bound, restore its minor-mode activation
+state during teardown if modified by BODY.
 
-When running tests tagged as serially runnable while interactive
-and the flag `erc-scenarios-common--graphical-p' is non-nil, run
-teardown tasks normally inhibited when interactive.  That is,
-behave almost as if `noninteractive' were also non-nil, and
-ensure buffers and other resources are destroyed on completion.
+Additionally, prepare the environment for an `erc-d' test server.  If an
+`erc-d' process exists, wait for it to start before running BODY.
+Locate dialog resource directories by expanding the variable
+`erc-scenarios-common-dialog' or its value in BINDINGS.
 
-Dialog resource directories are located by expanding the variable
-`erc-scenarios-common-dialog' or its value in BINDINGS."
+If the flag `erc-scenarios-common--graphical-p' is non-nil and a test is
+tagged as interactive-aware, usually via the \"ERC_TESTS_GRAPHICAL\"
+environment variable, run teardown tasks normally inhibited when
+interactive.  That is, behave almost as if `noninteractive' were also
+non-nil, and ensure buffers and other resources are destroyed on
+completion."
   (declare (indent 1))
 
   (let* ((orig-autojoin-mode (make-symbol "orig-autojoin-mode"))
          (combined `((,orig-autojoin-mode (bound-and-true-p erc-autojoin-mode))
-                     ,@(erc-scenarios-common--make-bindings bindings))))
+                     ,@(erc-scenarios-common--make-bindings bindings)))
+         (dynvars ()))
 
-    `(erc-d-t-with-cleanup (,@combined)
+    ;; Declare "erc-" variables dynamic in test scope.
+    (dolist (binder combined)
+      (setq binder (ensure-list binder))
+      (when (and (string-prefix-p "erc-" (symbol-name (car binder)))
+                 (not (special-variable-p (car binder))))
+        (push `(defvar ,(car binder)) dynvars)))
+    `(let (_)
+       ,@dynvars
+       (erc-d-t-with-cleanup (,@combined)
 
-         (ert-info ("Restore autojoin, etc., kill ERC buffers")
+           (ert-info ("Restore autojoin, etc., kill ERC buffers")
+             (dolist (buf (buffer-list))
+               (when-let* ((erc-d-u--process-buffer)
+                           (proc (get-buffer-process buf)))
+                 (delete-process proc)))
+
+             (erc-scenarios-common--remove-silence)
+
+             (when erc-scenarios-common-extra-teardown
+               (ert-info ("Running extra teardown")
+                 (funcall erc-scenarios-common-extra-teardown)))
+
+             (erc-buffer-do #'erc-scenarios-common--assert-date-stamps)
+             (when (and (boundp 'erc-autojoin-mode)
+                        (not (eq erc-autojoin-mode ,orig-autojoin-mode)))
+               (erc-autojoin-mode (if ,orig-autojoin-mode +1 -1)))
+
+             (when (or noninteractive erc-scenarios-common--graphical-p)
+               (when noninteractive
+                 (erc-scenarios-common--print-trace))
+               (erc-d-t-kill-related-buffers)
+               (delete-other-windows)))
+
+         (erc-scenarios-common--add-silence)
+
+         (ert-info ("Wait for dumb server")
            (dolist (buf (buffer-list))
-             (when-let* ((erc-d-u--process-buffer)
-                         (proc (get-buffer-process buf)))
-               (delete-process proc)))
+             (with-current-buffer buf
+               (when erc-d-u--process-buffer
+                 (erc-d-t-search-for 3 "Starting")))))
 
-           (erc-scenarios-common--remove-silence)
+         (ert-info ("Activate erc-debug-irc-protocol")
+           (unless (and (or noninteractive erc-scenarios-common--graphical-p)
+                        (not erc-debug-irc-protocol))
+             (erc-toggle-debug-irc-protocol)))
 
-           (when erc-scenarios-common-extra-teardown
-             (ert-info ("Running extra teardown")
-               (funcall erc-scenarios-common-extra-teardown)))
-
-           (erc-buffer-do #'erc-scenarios-common--assert-date-stamps)
-           (when (and (boundp 'erc-autojoin-mode)
-                      (not (eq erc-autojoin-mode ,orig-autojoin-mode)))
-             (erc-autojoin-mode (if ,orig-autojoin-mode +1 -1)))
-
-           (when (or noninteractive erc-scenarios-common--graphical-p)
-             (when noninteractive
-               (erc-scenarios-common--print-trace))
-             (erc-d-t-kill-related-buffers)
-             (delete-other-windows)))
-
-       (erc-scenarios-common--add-silence)
-
-       (ert-info ("Wait for dumb server")
-         (dolist (buf (buffer-list))
-           (with-current-buffer buf
-             (when erc-d-u--process-buffer
-               (erc-d-t-search-for 3 "Starting")))))
-
-       (ert-info ("Activate erc-debug-irc-protocol")
-         (unless (and (or noninteractive erc-scenarios-common--graphical-p)
-                      (not erc-debug-irc-protocol))
-           (erc-toggle-debug-irc-protocol)))
-
-       ,@body)))
+         ,@body))))
 
 (defvar erc-scenarios-common--term-size '(34 . 80))
 (declare-function term-char-mode "term" nil)
@@ -271,6 +284,30 @@ Dialog resource directories are located by expanding the variable
          ;; a <31 definition of `ert-with-buffer-selected'.
          (tcompat (and (featurep 'erc-tests-compat)
                        (locate-library "erc-tests-compat")))
+         (control-process nil)
+         ;; Create a control channel to communicate between the term
+         ;; subprocess and the controlling Emacs.  Must run before
+         ;; creating the subprocess so it sees the env var.
+         (control-server-process nil)
+         (_ (progn
+              (setq control-server-process
+                    (make-network-process
+                     :server 1
+                     :sentinel (lambda (p s)
+                                 (when (string-prefix-p "open" s)
+                                   (setq control-process p)
+                                   (set-process-buffer
+                                    p (get-buffer-create
+                                       "*erc-test-term-c2/superior*"))
+                                   (delete-process control-server-process)))
+                     :noquery t ; client inherits
+                     :host "localhost"
+                     :service t
+                     :coding 'utf-8-emacs
+                     :name "*erc-test-term-c2/superior*"))
+              (push (format "ERC_TEST_TERM_C2_PORT=%d"
+                            (process-contact control-server-process :service))
+                    process-environment)))
          ;; Make subprocess terminal bigger than controlling.
          (buf (cl-letf (((symbol-function 'window-screen-lines)
                          (lambda () (car erc-scenarios-common--term-size)))
@@ -298,7 +335,23 @@ Dialog resource directories are located by expanding the variable
       (set-process-query-on-exit-flag proc nil)
       (unless noninteractive (term-char-mode))
       (erc-d-t-wait-for 30 (process-live-p proc))
-      (while (accept-process-output proc))
+      (with-timeout (30 nil)
+        (while (accept-process-output proc)
+          ;; If the subprocess emitted something readable, assume it's a
+          ;; named function and call it, letting errors propagate.
+          (when control-process
+            (unless (zerop (buffer-size (process-buffer control-process)))
+              (with-current-buffer (process-buffer control-process)
+                (goto-char (point-min))
+                (let* ((test (read (current-buffer)))
+                       (result (and (symbolp test)
+                                    (string-prefix-p "erc-" (symbol-name test))
+                                    (with-current-buffer buf
+                                      (funcall test)))))
+                  (cl-assert (eq (get-buffer-process buf) proc))
+                  (run-at-time 0 nil #'process-send-string
+                               control-process (format "%S\n" result)))
+                (erase-buffer))))))
       (term-line-mode)
       (goto-char (point-min))
       ;; Otherwise gives process exited abnormally with exit-code >0
@@ -308,8 +361,45 @@ Dialog resource directories are located by expanding the variable
                     (buffer-substring-no-properties (line-beginning-position)
                                                     (line-end-position)))))
       (delete-file temp-file)
+      ;; Kill client if connected, else server that's still listening.
+      (delete-process (or control-process control-server-process))
       (when noninteractive
         (kill-buffer)))))
+
+(defmacro erc-scenarios-common-term-with-line-mode (&rest body)
+  "Run BODY to validate contents of term window's contents."
+  `(save-restriction
+     (cl-assert (eq major-mode 'term-mode))
+     (when (fboundp 'term-handle-deferred-scroll)
+       (term-handle-deferred-scroll))
+     (defvar term-home-marker)
+     (narrow-to-region term-home-marker (point-max))
+     (goto-char (point-min))
+     ,@body))
+
+(defvar erc-scenarios-common--inferior-term-c2-proc nil)
+
+(defun erc-scenarios-common-term-call-in-superior (sym)
+  "Run function SYM in superior process instead of term subprocess."
+  (run-at-time
+   0 nil #'process-send-string
+   (or (and erc-scenarios-common--inferior-term-c2-proc
+            (process-live-p erc-scenarios-common--inferior-term-c2-proc))
+       (setq erc-scenarios-common--inferior-term-c2-proc
+             (let ((b (get-buffer-create "*erc-test-term-c2/inferior*")))
+               (make-network-process
+                :buffer b
+                :noquery t
+                :host "localhost"
+                :service (string-to-number (getenv "ERC_TEST_TERM_C2_PORT"))
+                :coding 'utf-8-emacs
+                :name (buffer-name b)))))
+   (concat (symbol-name sym) "\n"))
+  (ert-with-buffer-selected (current-buffer)
+    (with-current-buffer "*erc-test-term-c2/inferior*"
+      (ert-info ("Superior process assertion confirmed")
+        (erc-d-t-wait-for 10 (> (point-max) 1))
+        (erase-buffer)))))
 
 (defvar erc-scenarios-common-interactive-debug-term-p nil
   "Non-nil means run test in an inferior Emacs, even if interactive.")
@@ -336,9 +426,11 @@ See Info node `(emacs) Term Mode' for the various commands."
 
 (defun erc-scenarios-common--assert-date-stamps ()
   "Ensure all date stamps are accounted for."
-  (dolist (stamp erc-stamp--date-stamps)
-    (should (eq 'datestamp (get-text-property (erc-stamp--date-marker stamp)
-                                              'erc--msg)))))
+  (defvar erc-stamp--date-stamps)
+  (when (fboundp 'erc-stamp--date-marker)
+    (dolist (stamp erc-stamp--date-stamps)
+      (should (eq 'datestamp (get-text-property (erc-stamp--date-marker stamp)
+                                                'erc--msg))))))
 
 (defun erc-scenarios-common-assert-initial-buf-name (id port)
   ;; Assert no limbo period when explicit ID given

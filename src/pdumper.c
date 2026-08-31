@@ -159,7 +159,7 @@ ptrdiff_t_to_dump_off (ptrdiff_t value)
 {
   eassert (DUMP_OFF_MIN <= value);
   eassert (value <= DUMP_OFF_MAX);
-  return (dump_off) value;
+  return value;
 }
 
 /* Worst-case allocation granularity on any system that might load
@@ -268,10 +268,13 @@ struct dump_table_locator
 enum
   {
    DUMP_RELOC_TYPE_BITS = 5,
-   DUMP_RELOC_ALIGNMENT_BITS = 2,
 
-   /* Minimum alignment required by dump file format.  */
-   DUMP_RELOCATION_ALIGNMENT = 1 << DUMP_RELOC_ALIGNMENT_BITS,
+   /* Minimum alignment required by dump file format.  Lisp_Objects and raw
+      pointers can both be relocated, so this can be any integer power of 2
+      up to min (alignof (Lisp_Object), alignof (void *)).
+      Larger values help dump_reloc_set_offset support larger offsets.  */
+   DUMP_RELOCATION_ALIGNMENT = min (alignof (Lisp_Object),
+				    alignof (void *)),
 
    /* The alignment granularity (in bytes) for objects we store in the
       dump.  Always suitable for heap objects; may be more aligned.  */
@@ -303,16 +306,17 @@ dump_reloc_set_type (struct dump_reloc *reloc, enum dump_reloc_type type)
 static dump_off
 dump_reloc_get_offset (struct dump_reloc reloc)
 {
-  return reloc.raw_offset << DUMP_RELOC_ALIGNMENT_BITS;
+  return reloc.raw_offset * DUMP_RELOCATION_ALIGNMENT;
 }
 
 static void
 dump_reloc_set_offset (struct dump_reloc *reloc, dump_off offset)
 {
-  eassert (offset >= 0);
-  reloc->raw_offset = offset >> DUMP_RELOC_ALIGNMENT_BITS;
+  eassume (offset >= 0);
+  reloc->raw_offset = offset / DUMP_RELOCATION_ALIGNMENT;
   if (dump_reloc_get_offset (*reloc) != offset)
-    error ("dump relocation out of range");
+    error ("dump relocation not an integral multiple of %d: %d",
+	   DUMP_RELOCATION_ALIGNMENT, offset);
 }
 
 void
@@ -607,13 +611,6 @@ static struct link_weight const
 
 /* Dump file creation */
 
-static void dump_grow_buffer (struct dump_context *ctx)
-{
-  ctx->buf = xrealloc (ctx->buf, ctx->buf_size = (ctx->buf_size ?
-						  (ctx->buf_size * 2)
-						  : 8 * 1024 * 1024));
-}
-
 static dump_off dump_object (struct dump_context *ctx, Lisp_Object object);
 static dump_off dump_object_for_offset (struct dump_context *ctx,
 					Lisp_Object object);
@@ -786,9 +783,17 @@ dump_write (struct dump_context *ctx, const void *buf, dump_off nbyte)
   eassert (nbyte == 0 || buf != NULL);
   eassert (ctx->obj_offset == 0);
   eassert (ctx->flags.dump_object_contents);
-  while (ctx->offset + nbyte > ctx->buf_size)
-    dump_grow_buffer (ctx);
-  memcpy ((char *)ctx->buf + ctx->offset, buf, nbyte);
+  dump_off avail = ctx->buf_size - ctx->offset;
+  if (avail < nbyte)
+    {
+      static_assert (DUMP_OFF_MAX <= PTRDIFF_MAX);
+      ptrdiff_t buf_size = ctx->buf_size;
+      ctx->buf = xpalloc (ctx->buf, &buf_size,
+			  max (nbyte - avail, 8 * 1024 * 1024),
+			  DUMP_OFF_MAX, 1);
+      ctx->buf_size = buf_size;
+    }
+  memcpy ((char *) {ctx->buf} + ctx->offset, buf, nbyte);
   ctx->offset += nbyte;
 }
 
@@ -1233,13 +1238,14 @@ dump_queue_dequeue (struct dump_queue *dump_queue, dump_off basis)
 
   dump_trace
     (("dump_queue_dequeue basis=%"PRIdDUMP_OFF" fancy=%"PRIdPTR
-      " zero=%"PRIdPTR" normal=%"PRIdPTR" strong=%"PRIdPTR" hash=%td\n"),
+      " zero=%"PRIdPTR" normal=%"PRIdPTR" strong=%"PRIdPTR
+      " hash=%"PRIdHASH_IDX"\n"),
      basis,
      dump_tailq_length (&dump_queue->fancy_weight_objects),
      dump_tailq_length (&dump_queue->zero_weight_objects),
      dump_tailq_length (&dump_queue->one_weight_normal_objects),
      dump_tailq_length (&dump_queue->one_weight_strong_objects),
-     (ptrdiff_t) XHASH_TABLE (dump_queue->link_weights)->count);
+     XHASH_TABLE (dump_queue->link_weights)->count);
 
   #define nr_candidates 3
   struct candidate
@@ -1772,7 +1778,7 @@ field_relpos (const void *in_start, const void *in_field)
      ever violated, make sure the two pointers indeed point into the
      same object, and if so, enlarge the value of PDUMPER_MAX_OBJECT_SIZE.  */
   eassert (relpos < PDUMPER_MAX_OBJECT_SIZE);
-  return (dump_off) relpos;
+  return relpos;
 }
 
 static void
@@ -1966,7 +1972,7 @@ dump_field_emacs_ptr (struct dump_context *ctx,
   intptr_t rel_emacs_ptr = 0;
   if (abs_emacs_ptr)
     {
-      rel_emacs_ptr = emacs_offset ((void *)abs_emacs_ptr);
+      rel_emacs_ptr = emacs_offset (abs_emacs_ptr);
       dump_reloc_dump_to_emacs_ptr_raw (ctx, ctx->obj_offset + relpos);
     }
   cpyptr ((char *) out + relpos, &rel_emacs_ptr);
@@ -1979,7 +1985,7 @@ dump_object_start_pseudovector (struct dump_context *ctx,
 {
   eassert (in_hdr->size & PSEUDOVECTOR_FLAG);
   ptrdiff_t vec_size = vectorlike_nbytes (in_hdr);
-  dump_object_start (ctx, out_hdr, (dump_off) vec_size);
+  dump_object_start (ctx, out_hdr, vec_size);
   *out_hdr = *in_hdr;
 }
 
@@ -4385,7 +4391,7 @@ DEFUN ("dump-emacs-portable--sort-predicate-copied",
 void
 pdumper_do_now_and_after_load_impl (pdumper_hook hook)
 {
-  if (nr_dump_hooks == ARRAYELTS (dump_hooks))
+  if (nr_dump_hooks == countof (dump_hooks))
     fatal ("out of dump hooks: make dump_hooks[] bigger");
   dump_hooks[nr_dump_hooks++] = hook;
   hook ();
@@ -4394,7 +4400,7 @@ pdumper_do_now_and_after_load_impl (pdumper_hook hook)
 void
 pdumper_do_now_and_after_late_load_impl (pdumper_hook hook)
 {
-  if (nr_dump_late_hooks == ARRAYELTS (dump_late_hooks))
+  if (nr_dump_late_hooks == countof (dump_late_hooks))
     fatal ("out of dump hooks: make dump_late_hooks[] bigger");
   dump_late_hooks[nr_dump_late_hooks++] = hook;
   hook ();
@@ -4403,7 +4409,7 @@ pdumper_do_now_and_after_late_load_impl (pdumper_hook hook)
 static void
 pdumper_remember_user_data_1 (void *mem, int nbytes)
 {
-  if (nr_remembered_data == ARRAYELTS (remembered_data))
+  if (nr_remembered_data == countof (remembered_data))
     fatal ("out of remembered data slots: make remembered_data[] bigger");
   remembered_data[nr_remembered_data].mem = mem;
   remembered_data[nr_remembered_data].sz = nbytes;
@@ -4415,7 +4421,7 @@ pdumper_remember_scalar_impl (void *mem, ptrdiff_t nbytes)
 {
   eassert (0 <= nbytes && nbytes <= INT_MAX);
   if (nbytes > 0)
-    pdumper_remember_user_data_1 (mem, (int) nbytes);
+    pdumper_remember_user_data_1 (mem, nbytes);
 }
 
 void
@@ -5654,7 +5660,7 @@ pdumper_load (const char *dump_filename, char *argv0)
   err = PDUMPER_LOAD_BAD_FILE_TYPE;
   if (stat.st_size > INTPTR_MAX)
     goto out;
-  dump_size = (intptr_t) stat.st_size;
+  dump_size = stat.st_size;
 
   err = PDUMPER_LOAD_BAD_FILE_TYPE;
   if (dump_size < sizeof (*header))
@@ -5729,7 +5735,7 @@ pdumper_load (const char *dump_filename, char *argv0)
      .protection = DUMP_MEMORY_ACCESS_READWRITE,
     };
 
-  if (!dump_mmap_contiguous (sections, ARRAYELTS (sections)))
+  if (!dump_mmap_contiguous (sections, countof (sections)))
     goto out;
 
   err = PDUMPER_LOAD_ERROR;
@@ -5766,7 +5772,7 @@ pdumper_load (const char *dump_filename, char *argv0)
   dump_do_all_emacs_relocations (header, dump_base);
 
   dump_mmap_discard_contents (&sections[DS_DISCARDABLE]);
-  for (int i = 0; i < ARRAYELTS (sections); ++i)
+  for (int i = 0; i < countof (sections); ++i)
     dump_mmap_reset (&sections[i]);
 
   Lisp_Object hashes = zero_vector;
@@ -5805,7 +5811,7 @@ pdumper_load (const char *dump_filename, char *argv0)
   dump_private.dump_filename = dump_filename_copy;
 
  out:
-  for (int i = 0; i < ARRAYELTS (sections); ++i)
+  for (int i = 0; i < countof (sections); ++i)
     dump_mmap_release (&sections[i]);
   if (dump_fd >= 0)
     emacs_close (dump_fd);
@@ -5909,7 +5915,6 @@ syms_of_pdumper (void)
 	       doc: /* The fingerprint of this Emacs binary.
 It is a string that is supposed to be unique to each build of
 Emacs.  */);
-  Vpdumper_fingerprint = make_unibyte_string ((char *) hexbuf,
-					      sizeof hexbuf);
+  Vpdumper_fingerprint = make_unibyte_string (hexbuf, sizeof hexbuf);
 #endif /* HAVE_PDUMPER */
 }

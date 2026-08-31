@@ -47,6 +47,7 @@ along with GNU Emacs.  If not, see <https://www.gnu.org/licenses/>.  */
 
 #include "lisp.h"
 #include "w32term.h"
+#include "w32font.h"
 #include "frame.h"
 #include "window.h"
 #include "buffer.h"
@@ -200,6 +201,9 @@ typedef BOOL (WINAPI * ImmSetCompositionWindow_Proc) (IN HIMC context,
 typedef BOOL (WINAPI * ImmGetOpenStatus_Proc) (IN HIMC);
 typedef BOOL (WINAPI * ImmSetOpenStatus_Proc) (IN HIMC, IN BOOL);
 
+/* Set IME font.  */
+typedef BOOL (WINAPI * ImmSetCompositionFont_Proc) (IN HIMC, LPLOGFONTW lplf);
+
 typedef HMONITOR (WINAPI * MonitorFromPoint_Proc) (IN POINT pt, IN DWORD flags);
 typedef BOOL (WINAPI * GetMonitorInfo_Proc)
   (IN HMONITOR monitor, OUT struct MONITOR_INFO* info);
@@ -247,6 +251,7 @@ static ImmGetCompositionString_Proc get_composition_string_fn = NULL;
 static ImmGetContext_Proc get_ime_context_fn = NULL;
 static ImmGetOpenStatus_Proc get_ime_open_status_fn = NULL;
 static ImmSetOpenStatus_Proc set_ime_open_status_fn = NULL;
+static ImmSetCompositionFont_Proc set_ime_composition_font_fn = NULL;
 static ImmReleaseContext_Proc release_ime_context_fn = NULL;
 static ImmSetCompositionWindow_Proc set_ime_composition_window_fn = NULL;
 static MonitorFromPoint_Proc monitor_from_point_fn = NULL;
@@ -838,7 +843,7 @@ w32_default_color_map (void)
 
   cmap = Qnil;
 
-  for (i = 0; i < ARRAYELTS (w32_color_map); pc++, i++)
+  for (i = 0; i < countof (w32_color_map); pc++, i++)
     cmap = Fcons (Fcons (build_string (pc->name),
 			 make_fixnum (pc->colorref)),
 		  cmap);
@@ -2834,7 +2839,7 @@ w32_createwindow (struct frame *f, int *coords)
 	}
 
       /* Reset F's touch point array.  */
-      for (i = 0; i < ARRAYELTS (f->output_data.w32->touch_ids); ++i)
+      for (i = 0; i < countof (f->output_data.w32->touch_ids); ++i)
 	f->output_data.w32->touch_ids[i] = -1;
 
       /* Assign an offset for touch points reported to F.  */
@@ -4173,7 +4178,7 @@ deliver_wm_chars (int do_translate, HWND hwnd, UINT msg, UINT wParam,
       windows_msg.time = GetMessageTime ();
       TranslateMessage (&windows_msg);
     }
-  count = get_wm_chars (hwnd, buf, ARRAYELTS (buf), 1,
+  count = get_wm_chars (hwnd, buf, countof (buf), 1,
 			/* The message may have been synthesized by
 			   who knows what; be conservative.  */
 			modifier_set (VK_LCONTROL)
@@ -5032,6 +5037,7 @@ w32_wnd_proc (HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
       else
 	{
 	  COMPOSITIONFORM form;
+	  LOGFONTW lf;
 	  HIMC context;
 	  struct window *w;
 
@@ -5077,6 +5083,8 @@ w32_wnd_proc (HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 	  if (!context)
 	    goto dflt;
 
+	  GetObjectW (FONT_HANDLE (w32_system_remap_font), sizeof (lf), &lf);
+	  set_ime_composition_font_fn (context, &lf);
 	  set_ime_composition_window_fn (context, &form);
 	  release_ime_context_fn (hwnd, context);
 	}
@@ -8413,7 +8421,7 @@ DEFUN ("x-file-dialog", Fx_file_dialog, Sx_file_dialog, 2, 5, 0,
 	  file_details_w->lStructSize = sizeof (*file_details_w);
 	/* Set up the inout parameter for the selected file name.  */
 	file_details_w->lpstrFile = filename_buf_w;
-	file_details_w->nMaxFile = ARRAYELTS (filename_buf_w);
+	file_details_w->nMaxFile = countof (filename_buf_w);
 	file_details_w->hwndOwner = FRAME_W32_WINDOW (f);
 	/* Undocumented Bug in Common File Dialog:
 	   If a filter is not specified, shell links are not resolved.  */
@@ -8446,7 +8454,7 @@ DEFUN ("x-file-dialog", Fx_file_dialog, Sx_file_dialog, 2, 5, 0,
 	else
 	  file_details_a->lStructSize = sizeof (*file_details_a);
 	file_details_a->lpstrFile = filename_buf_a;
-	file_details_a->nMaxFile = ARRAYELTS (filename_buf_a);
+	file_details_a->nMaxFile = countof (filename_buf_a);
 	file_details_a->hwndOwner = FRAME_W32_WINDOW (f);
 	file_details_a->lpstrFilter = filter_a;
 	file_details_a->lpstrInitialDir = dir_a;
@@ -12332,6 +12340,9 @@ globals_of_w32fns (void)
       get_proc_addr (imm32_lib, "ImmGetOpenStatus");
     set_ime_open_status_fn = (ImmSetOpenStatus_Proc)
       get_proc_addr (imm32_lib, "ImmSetOpenStatus");
+
+    set_ime_composition_font_fn = (ImmSetCompositionFont_Proc)
+      get_proc_addr (imm32_lib, "ImmSetCompositionFontW");
   }
 
   HMODULE hm_kernel32 = GetModuleHandle ("kernel32.dll");

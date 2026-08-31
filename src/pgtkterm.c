@@ -109,6 +109,7 @@ static bool current_drop_context_drop;
 static guint32 current_drop_time;
 
 static void pgtk_delete_display (struct pgtk_display_info *);
+static void pgtk_new_focus_frame (struct pgtk_display_info *, struct frame *);
 static void pgtk_clear_frame_area (struct frame *, int, int, int, int);
 static void pgtk_fill_rectangle (struct frame *, unsigned long, int, int,
 				 int, int, bool);
@@ -467,9 +468,62 @@ pgtk_free_frame_resources (struct frame *f)
 #define CLEAR_IF_EQ(FIELD)	\
   do { if (f == dpyinfo->FIELD) dpyinfo->FIELD = 0; } while (false)
 
-  CLEAR_IF_EQ (x_focus_frame);
+  /* If this frame currently holds keyboard focus, explicitly transfer
+     focus to its parent frame before releasing resources.
+
+     On X11 the X server delivers a FocusIn event to the parent when a
+     child window is destroyed, so focus was restored automatically.
+     On Wayland there is no such mechanism: the compositor does nothing,
+     leaving Emacs with x_focus_frame == NULL permanently and ignoring
+     all keyboard input (bug#64625).
+
+     IMPORTANT: we must clear highlight_frame from f BEFORE calling
+     pgtk_new_focus_frame.  pgtk_new_focus_frame calls
+     pgtk_frame_rehighlight, which calls frame_unhighlight(old_highlight)
+     where old_highlight = dpyinfo->highlight_frame.  If that is still f,
+     frame_unhighlight -> gui_update_cursor(f) would try to use f's face
+     cache, which was already freed by free_frame_faces(f) above ->
+     segfault.  By clearing highlight_frame first, pgtk_frame_rehighlight
+     sees old_highlight == NULL and skips frame_unhighlight entirely.  */
+  if (f == dpyinfo->x_focus_frame)
+    {
+      struct frame *new_focus = FRAME_PARENT_FRAME (f);
+
+      /* Clear highlight_frame from f so pgtk_frame_rehighlight will not
+         call frame_unhighlight on the dying frame whose faces are freed. */
+      if (dpyinfo->highlight_frame == f)
+        dpyinfo->highlight_frame = NULL;
+
+      if (new_focus != NULL
+          && FRAME_LIVE_P (new_focus)
+          && FRAME_GTK_WIDGET (new_focus) != NULL
+          && gtk_widget_get_realized (FRAME_GTK_WIDGET (new_focus)))
+        {
+          /* Transfer Emacs's internal focus/highlight to the parent.  */
+          pgtk_new_focus_frame (dpyinfo, new_focus);
+          /* Physically move the GTK/Wayland keyboard focus to the parent
+             widget.  The Wayland compositor will not do this automatically
+             when the child widget is destroyed.  */
+          gtk_widget_grab_focus (FRAME_GTK_WIDGET (new_focus));
+        }
+      else
+        {
+          /* Parent is gone or unrealized; just clear focus state.  */
+          dpyinfo->x_focus_frame = NULL;
+          pgtk_frame_rehighlight (dpyinfo);
+        }
+    }
+
+  /* CLEAR_IF_EQ is now a no-op for highlight_frame if we already cleared
+     it above, which is correct.  */
   CLEAR_IF_EQ (highlight_frame);
-  CLEAR_IF_EQ (x_focus_event_frame);
+
+  /* Clear x_focus_event_frame directly so that any focus-out event
+     emitted by gtk_widget_destroy below is a no-op in
+     pgtk_focus_changed, preventing a spurious
+     pgtk_new_focus_frame(dpyinfo, NULL) that would undo the transfer.  */
+  if (f == dpyinfo->x_focus_event_frame)
+    dpyinfo->x_focus_event_frame = NULL;
   CLEAR_IF_EQ (last_mouse_frame);
   CLEAR_IF_EQ (last_mouse_motion_frame);
   CLEAR_IF_EQ (last_mouse_glyph_frame);
@@ -733,9 +787,9 @@ pgtk_iconify_frame (struct frame *f)
 }
 
 static gboolean
-pgtk_make_frame_visible_wait_for_map_event_cb (GtkWidget *widget,
-					       GdkEventAny *event,
-					       gpointer user_data)
+pgtk_make_frame_visible_wait_for_event_cb (GtkWidget *widget,
+					   GdkEventAny *event,
+					   gpointer user_data)
 {
   int *foundptr = user_data;
   *foundptr = 1;
@@ -743,7 +797,7 @@ pgtk_make_frame_visible_wait_for_map_event_cb (GtkWidget *widget,
 }
 
 static gboolean
-pgtk_make_frame_visible_wait_for_map_event_timeout (gpointer user_data)
+pgtk_make_frame_visible_wait_for_event_timeout (gpointer user_data)
 {
   int *timedoutptr = user_data;
   *timedoutptr = 1;
@@ -751,7 +805,7 @@ pgtk_make_frame_visible_wait_for_map_event_timeout (gpointer user_data)
 }
 
 static void
-pgtk_wait_for_map_event (struct frame *f, bool multiple_times)
+pgtk_wait_for_event (struct frame *f, const gchar *signal_name)
 {
   if (FLOATP (Vpgtk_wait_for_event_timeout))
     {
@@ -760,25 +814,17 @@ pgtk_wait_for_map_event (struct frame *f, bool multiple_times)
       int found = 0;
       int timed_out = 0;
       gulong id
-	= g_signal_connect (FRAME_WIDGET (f), "map-event",
+	= g_signal_connect (FRAME_WIDGET (f), signal_name,
 			    G_CALLBACK
-			    (pgtk_make_frame_visible_wait_for_map_event_cb),
+			    (pgtk_make_frame_visible_wait_for_event_cb),
 			    &found);
       guint src
 	= g_timeout_add (msec,
-			 pgtk_make_frame_visible_wait_for_map_event_timeout,
+			 pgtk_make_frame_visible_wait_for_event_timeout,
 			 &timed_out);
 
-      if (!multiple_times)
-	{
-	  while (!found && !timed_out)
-	    gtk_main_iteration ();
-	}
-      else
-	{
-	  while (!timed_out)
-	    gtk_main_iteration ();
-	}
+      while (!found && !timed_out)
+	gtk_main_iteration ();
 
       g_signal_handler_disconnect (FRAME_WIDGET (f), id);
 
@@ -798,7 +844,7 @@ pgtk_make_frame_visible (struct frame *f)
       if (win)
 	gtk_window_deiconify (GTK_WINDOW (win));
 
-      pgtk_wait_for_map_event (f, false);
+      pgtk_wait_for_event (f, "map-event");
     }
 }
 
@@ -806,14 +852,15 @@ pgtk_make_frame_visible (struct frame *f)
 void
 pgtk_make_frame_invisible (struct frame *f)
 {
-  gtk_widget_hide (FRAME_WIDGET (f));
+  if (FRAME_VISIBLE_P (f))
+    {
+      gtk_widget_hide (FRAME_WIDGET (f));
 
-  /* Handle any pending map event(s), then make the frame visible
-     manually, to avoid race conditions.  */
-  pgtk_wait_for_map_event (f, true);
+      pgtk_wait_for_event (f, "unmap-event");
 
-  SET_FRAME_VISIBLE (f, 0);
-  SET_FRAME_ICONIFIED (f, false);
+      SET_FRAME_VISIBLE (f, 0);
+      SET_FRAME_ICONIFIED (f, false);
+    }
 }
 
 static void
@@ -4483,7 +4530,8 @@ set_fullscreen_state (struct frame *f)
 
     case FULLSCREEN_WIDTH:
     case FULLSCREEN_HEIGHT:
-      /* Not supported by gtk. Ignore them. */
+      /* Restoring from fullscreen to tiled (Bug#81165, Bug#81320).  */
+      gtk_window_unfullscreen (widget);
       break;
     }
 
@@ -7150,7 +7198,7 @@ pgtk_term_init (Lisp_Object display_name, char *resource_name)
   Lisp_Object system_name = Fsystem_name ();
   ptrdiff_t nbytes;
   if (ckd_add (&nbytes, SBYTES (Vinvocation_name), SBYTES (system_name) + 2))
-    memory_full (SIZE_MAX);
+    memory_full_up ();
   dpyinfo->x_id = ++x_display_id;
   dpyinfo->x_id_name = xmalloc (nbytes);
   char *nametail = lispstpcpy (dpyinfo->x_id_name, Vinvocation_name);

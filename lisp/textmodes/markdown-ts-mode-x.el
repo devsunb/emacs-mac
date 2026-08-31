@@ -699,7 +699,7 @@ If optional REMOVE is non-nil, remove tables including their templates."
     ;; Convert markers to absolute positions.
     (setq beg (if (markerp beg) (marker-position beg) beg))
     (setq end (if (markerp end) (marker-position end) end))
-    ;; NOTE: Operate on the widened buffer to avoid treesiter crash issues.
+    ;; NOTE: Operate on the widened buffer to avoid treesitter crash issues.
     (without-restriction
       (let ((tocs)
             (beg-pos beg)
@@ -736,7 +736,11 @@ is nil and the command is run interactively, prompt for a template.
 The basic template uses all defaults and is likely the best choice for
 most uses.  The complete template illustrates all parameters set to
 their defaults and is useful as a starting point to customize a table."
-  (interactive "cTemplate [b]asic [c]omplete:")
+  (interactive
+   (list (car (read-multiple-choice
+               "Table of contents template"
+               '((?b "basic")
+                 (?c "complete"))))))
   (pcase char
     (?b
      (insert "<!-- markdown-ts-toc: -->\n"
@@ -910,7 +914,7 @@ tables not being processed when this function is called."
     ;; Convert markers to absolute positions.
     (setq beg (if (markerp beg) (marker-position beg) beg))
     (setq end (if (markerp end) (marker-position end) end))
-    ;; NOTE: Operate on the widened buffer to avoid treesiter crash issues.
+    ;; NOTE: Operate on the widened buffer to avoid treesitter crash issues.
     (without-restriction
       (let ((tocs (markdown-ts--tocs beg end)))
         (unless tocs

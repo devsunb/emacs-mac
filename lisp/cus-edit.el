@@ -1105,11 +1105,29 @@ even if it doesn't match the type.)
 (defun setopt--set (variable value)
   (custom-load-symbol variable)
   ;; Check that the type is correct.
-  (when-let* ((type (get variable 'custom-type)))
-    (unless (widget-apply (widget-convert type) :match value)
-      (warn "Value does not match %S's type `%S': %S" variable type value)))
-  (put variable 'custom-check-value (list value))
+  (let* ((type (get variable 'custom-type)))
+    (if (not (or type (get variable 'standard-value)))
+        ;; `custom-declare-variable' has not run yet.  Postpone the check.
+        (push value (get variable 'custom-check-values))
+      (unless (widget-apply (widget-convert type) :match value)
+        (warn "Value does not match %S's type `%S': %S" variable type value))))
   (funcall (or (get variable 'custom-set) #'set-default) variable value))
+
+;;;###autoload
+(defcustom setopt-local-type-mismatch nil
+  "Behavior of `setopt-local’ if value's type doesn't match its definition.
+If nil, emit a warning, but accept the mismatched value.
+If the symbol `accept', ignore type mismatch warning and assign the value.
+If the symbol `discard', ignore warning and discard the mismatched value.
+If any other non-nil value, prompt whether to accept or discard the value.
+Note: Accepting mismatched values may result in unexpected behavior."
+  :type '(choice (const :tag "Emit a warning and accept the type value" nil)
+                 (const :tag "Prompt to accept or discard the value" t)
+                 (const :tag "Ignore the warning and accept the value" accept)
+                 (const :tag "Ignore the warning and discard the value" discard))
+  :version "32.1"
+  :safe #'symbolp
+  :group 'customize)
 
 ;;;###autoload
 (defmacro setopt-local (&rest pairs)
@@ -1142,17 +1160,42 @@ Signal an error if a `custom-set' form does not support the
 
 ;;;###autoload
 (defun setopt--set-local (variable value)
+  "Set a buffer local VARIABLE to VALUE.
+Consult `setopt-local-type-mismatch'."
   (custom-load-symbol variable)
-  ;; Check that the type is correct.
-  (when-let* ((type (get variable 'custom-type)))
-    (unless (widget-apply (widget-convert type) :match value)
-      (warn "Value does not match %S's type `%S': %S" variable type value)))
-  (condition-case _
-      (funcall (or (get variable 'custom-set)
-                   (lambda (x v &optional _) (set-local x v)))
-               variable value 'buffer-local)
-    (wrong-number-of-arguments
-     (error "The setter of %S does not support setopt-local" variable))))
+  (let ((accept t))
+    ;; Check that the type is correct.
+    (when-let* ((type (get variable 'custom-type)))
+      ;; FIXME: If the var hasn't been initialized yet, `type' is nil and we
+      ;; skip the type check altogether.  Use `custom-check-values'?
+      (unless (widget-apply (widget-convert type) :match value)
+        (let ((msg (format-message
+                    "Value does not match %S's type `%S': %S"
+                    variable type value)))
+          ;; FIXME: It's weird to do this `setopt-local-type-mismatch`
+          ;; control  for `setopt-local' and not for `setopt'.
+          (cond
+           ;; Fall through and try anyway.
+           ((eq setopt-local-type-mismatch 'accept))
+           ;; Silently discard the mismatched value.
+           ((eq setopt-local-type-mismatch 'discard)
+            (setq accept nil))
+           ;; Prompt to accept or discard the value.
+           (setopt-local-type-mismatch
+            (setq accept (eq ?a (car (read-multiple-choice
+                                      msg
+                                      '((?a "accept" "Accept")
+                                        (?d "discard" "Discard")))))))
+           (t
+            (warn msg))))))
+    (when accept
+      (condition-case _
+          (funcall (or (get variable 'custom-set)
+                       (lambda (x v &optional _) (set-local x v)))
+                   variable value 'buffer-local)
+        (wrong-number-of-arguments
+         (warn "The setter of %S lacks support for setopt-local" variable)
+         (set-local variable value))))))
 
 ;;;###autoload
 (defun customize-save-variable (variable value &optional comment)
@@ -1351,7 +1394,7 @@ Show the buffer in another window, but don't select it."
     (unless (eq symbol basevar)
       (message "`%s' is an alias for `%s'" symbol basevar))))
 
-(defvar customize-changed-options-previous-release "30.1"
+(defvar customize-changed-options-previous-release "31.1"
   "Version for `customize-changed' to refer back to by default.")
 
 ;; Packages will update this variable, so make it available.

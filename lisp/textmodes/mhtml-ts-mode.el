@@ -362,11 +362,13 @@ Return nil if there is no name or if NODE is not a defun node."
         ('html
          (setq-local comment-start "<!-- ")
          (setq-local comment-start-skip nil)
+         (setq-local comment-start-line-regexp nil)
          (setq-local comment-end " -->")
          (setq-local comment-end-skip nil))
         ('css
          (setq-local comment-start "/*")
          (setq-local comment-start-skip "/\\*+[ \t]*")
+         (setq-local comment-start-line-regexp nil)
          (setq-local comment-end "*/")
          (setq-local comment-end-skip "[ \t]*\\*+/"))
         ('javascript
@@ -511,7 +513,9 @@ Powered by tree-sitter."
 
     ;; jsdoc is not mandatory for js-ts-mode, so we respect this by
     ;; adding jsdoc range rules only when jsdoc is available.
-    (when (treesit-ensure-installed 'jsdoc)
+    ;; `treesit-ready-p' also checks for buffer size.
+    (when (and (treesit-ensure-installed 'jsdoc)
+               (treesit-ready-p 'jsdoc))
       (setq-local c-ts-common--comment-regexp
                   js--treesit-jsdoc-comment-regexp))
 

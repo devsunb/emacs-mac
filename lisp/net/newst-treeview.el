@@ -1191,6 +1191,15 @@ Arguments are ignored."
         (if newsticker-automatically-mark-visited-items-as-old
             (newsticker-treeview-mark-item-old))))))
 
+(defun newsticker-treeview-copy-url ()
+  "Copy the url for the current item."
+  (interactive)
+  (let ((url (url-encode-url
+              (newsticker--link
+               (newsticker--treeview-get-selected-item)))))
+    (kill-new url)
+    (message "Copied %s" url)))
+
 (defun newsticker--treeview-buffer-init ()
   "Initialize all treeview buffers."
   (setq newsticker--treeview-buffers nil)
@@ -1387,8 +1396,10 @@ Will move to previous feed until an item is found."
 (defun newsticker--treeview-get-selected-item ()
   "Return item that is currently selected in list buffer."
   (with-current-buffer (newsticker--treeview-list-buffer)
-    (beginning-of-line)
-    (get-text-property (point) :nt-item)))
+    (goto-char (point-min))
+    (if-let* ((selected (text-property-search-forward :nt-selected t t)))
+        (get-text-property (prop-match-beginning selected) :nt-item)
+      (get-text-property (point-min) :nt-item))))
 
 (defun newsticker-treeview-mark-item-old (&optional dont-proceed)
   "Mark current item as old unless it is obsolete.
@@ -2038,6 +2049,7 @@ Return t if groups have changed, nil otherwise."
   "s"          #'newsticker-treeview-save
   "u"          #'newsticker-treeview-update
   "v"          #'newsticker-treeview-browse-url
+  "w"          #'newsticker-treeview-copy-url
   ;;"C-j"      #'newsticker-treeview-scroll-item
   ;;"RET"      #'newsticker-treeview-scroll-item
   "M-m"        #'newsticker-group-move-feed

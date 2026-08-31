@@ -709,7 +709,7 @@ STYLE is the inline CSS stylesheet (or tag referring to an external sheet)."
 --> </script>
   </head>
   <body onload=\"stripe('index'); return true;\">\n"
-          (mapconcat #'hfy-html-quote (mapcar #'char-to-string file) "") style))
+          (mapconcat #'hfy-html-quote (mapcar #'char-to-string file)) style))
 
 (defun hfy-default-footer (_file)
   "Default value for `hfy-page-footer'.
@@ -1000,6 +1000,12 @@ to be merged by the user - `hfy-flatten-style' should do this."
                    parent
                    (hfy-face-to-style-i
                     (hfy-face-attr-for-class v hfy-display-class))))))
+        ;; The special value `reset' stands for the value of the
+        ;; corresponding attribute (KEY) of the ‘default’ face.
+        (when (eq val 'reset)
+          (setq val (plist-get
+                     (hfy-face-attr-for-class 'default hfy-display-class)
+                     key)))
         (setq this
               (if val (cl-case key
                        (:family         (hfy-family    val))

@@ -67,12 +67,10 @@ for other purposes should customize either `erc-enable-logging' or
   ;;enable
   ((add-hook 'erc-insert-done-hook #'erc-truncate-buffer)
    (add-hook 'erc-connect-pre-hook #'erc-truncate--warn-about-logging)
-   (add-hook 'erc-mode-hook #'erc-truncate--setup)
-   (unless erc--updating-modules-p (erc-buffer-do #'erc-truncate--setup)))
+   (erc-with-initialized-session (erc-truncate--setup)))
   ;; disable
   ((remove-hook 'erc-insert-done-hook #'erc-truncate-buffer)
    (remove-hook 'erc-connect-pre-hook #'erc-truncate--warn-about-logging)
-   (remove-hook 'erc-mode-hook #'erc-truncate--setup)
    (erc-buffer-do #'erc-truncate--setup)))
 
 (defvar-local erc-truncate--buffer-size nil
@@ -98,9 +96,11 @@ for other purposes should customize either `erc-enable-logging' or
              (erc-log--check-legacy-implicit-enabling-by-truncate))
     ;; Emit a real Emacs warning because the message may be
     ;; truncated away before it can be read if merely inserted.
-    (erc-button--display-error-notice-with-keys-and-warn
-     "The `truncate' module no longer enables logging implicitly."
-     " See the doc string for `erc-truncate-mode' for details.")))
+    (let ((erc--warn-once-before-connect-function
+           #'erc-button--display-error-notice-with-keys-and-warn))
+      (erc--warn-once-before-connect 'erc-truncate-mode
+        "The `truncate' module no longer enables logging implicitly."
+        " See the doc string for `erc-truncate-mode' for details."))))
 
 ;;;###autoload
 (defun erc-truncate-buffer-to-size (size &optional buffer)

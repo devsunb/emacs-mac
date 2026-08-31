@@ -962,6 +962,20 @@ module_vec_size (emacs_env *env, emacs_value vector)
   return ASIZE (lisp);
 }
 
+static uint32_t *
+module_canvas_data (emacs_env *env, emacs_value canvas)
+{
+  uint32_t *data = 0;
+  MODULE_FUNCTION_BEGIN (NULL);
+#ifdef HAVE_WINDOW_SYSTEM
+  data = canvas_data (value_to_lisp (canvas));
+#else
+  error ("Canvas: No window system");
+#endif
+  MODULE_INTERNAL_CLEANUP ();
+  return data;
+}
+
 /* This function should return true if and only if maybe_quit would
    quit.  */
 static bool
@@ -1046,7 +1060,7 @@ import/export overhead on most platforms.
 
 /* Documented maximum count of magnitude elements. */
 #define module_bignum_count_max \
-  ((ptrdiff_t) min (SIZE_MAX, PTRDIFF_MAX) / sizeof (emacs_limb_t))
+  ((ptrdiff_t) (min (SIZE_MAX, PTRDIFF_MAX) / sizeof (emacs_limb_t)))
 
 /* Verify that emacs_limb_t indeed has unique object
    representations.  */
@@ -1100,7 +1114,7 @@ module_extract_big_integer (emacs_env *env, emacs_value arg, int *sign,
          suffice.  */
       EMACS_UINT u;
       enum { required = (sizeof u + size - 1) / size };
-      static_assert (0 < required && +required <= module_bignum_count_max);
+      static_assert (0 < required && required <= module_bignum_count_max);
       if (magnitude == NULL)
         {
           *count = required;
@@ -1120,7 +1134,7 @@ module_extract_big_integer (emacs_env *env, emacs_value arg, int *sign,
         u = -(EMACS_UINT) x;
       static_assert (required * bits < PTRDIFF_MAX);
       for (ptrdiff_t i = 0; i < required; ++i)
-        magnitude[i] = (emacs_limb_t) (u >> (i * bits));
+        magnitude[i] = u >> (i * bits);
       MODULE_INTERNAL_CLEANUP ();
       return true;
     }
@@ -1132,9 +1146,8 @@ module_extract_big_integer (emacs_env *env, emacs_value arg, int *sign,
       return true;
     }
   size_t required_size = (mpz_sizeinbase (*x, 2) + numb - 1) / numb;
-  eassert (required_size <= PTRDIFF_MAX);
-  ptrdiff_t required = (ptrdiff_t) required_size;
-  eassert (required <= module_bignum_count_max);
+  eassert (required_size <= module_bignum_count_max);
+  ptrdiff_t required = required_size;
   if (magnitude == NULL)
     {
       *count = required;
@@ -1613,6 +1626,7 @@ initialize_environment (emacs_env *env, struct emacs_env_private *priv)
   env->open_channel = module_open_channel;
   env->make_interactive = module_make_interactive;
   env->make_unibyte_string = module_make_unibyte_string;
+  env->canvas_data = module_canvas_data;
   return env;
 }
 

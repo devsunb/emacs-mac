@@ -724,6 +724,7 @@ Return nil if NODE is not a defun node or doesn't have a name."
   (setq-local comment-start "# ")
   (setq-local comment-start-skip
               (rx "#" (* (syntax whitespace))))
+  (setq-local comment-start-line-regexp comment-start-skip)
 
   (setq-local comment-end "")
   (setq-local comment-end-skip
@@ -737,7 +738,9 @@ Return nil if NODE is not a defun node or doesn't have a name."
   (add-hook 'post-self-insert-hook
             #'elixir-ts--electric-pair-string-delimiter 'append t)
 
-  (when (treesit-ensure-installed 'elixir)
+  ;; `treesit-ready-p' also checks for buffer size.
+  (when (and (treesit-ensure-installed 'elixir)
+             (treesit-ready-p 'elixir))
     (setq-local treesit-primary-parser
                 (treesit-parser-create 'elixir))
 
@@ -762,7 +765,9 @@ Return nil if NODE is not a defun node or doesn't have a name."
     (setq-local treesit-defun-name-function #'elixir-ts--defun-name)
 
     ;; Embedded Heex.
-    (when (treesit-ensure-installed 'heex)
+    ;; `treesit-ready-p' also checks for buffer size.
+    (when (and (treesit-ensure-installed 'heex)
+               (treesit-ready-p 'heex))
       (require 'heex-ts-mode)
       (treesit-parser-create 'heex)
 

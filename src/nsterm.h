@@ -1215,6 +1215,7 @@ extern void ns_image_set_smoothing (void *img, bool smooth);
 extern unsigned long ns_get_pixel (void *img, int x, int y);
 extern void ns_put_pixel (void *img, int x, int y, unsigned long argb);
 extern void ns_set_alpha (void *img, int x, int y, unsigned char a);
+extern void *ns_image_reset (void *img, int width, int height);
 
 extern int ns_display_pixel_height (struct ns_display_info *);
 extern int ns_display_pixel_width (struct ns_display_info *);
@@ -1382,6 +1383,11 @@ enum NSWindowTabbingMode
 #define NSControlStateValueOff NSOffState
 #define NSBezelStyleRounded NSRoundedBezelStyle
 #define NSButtonTypeMomentaryPushIn NSMomentaryPushInButton
+#endif
+
+#if !defined (NS_IMPL_COCOA) || !defined (MAC_OS_X_VERSION_10_15)
+/* Deprecated in macOS 10.15.  */
+#define NSLevelIndicatorStyleContinuousCapacity NSContinuousCapacityLevelIndicatorStyle
 #endif
 
 extern void mark_nsterm (void);

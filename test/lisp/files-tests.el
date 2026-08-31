@@ -401,7 +401,8 @@ be $HOME."
   (append '("foo" "$foo" "~foo")
           ;; No amount of quoting will allow creation of a file name
           ;; with an embedded '*' on MS-Windows and MS-DOS.
-          (if (not (memq system-type '(windows-nt ms-dos))) '("foo*bar")))
+          (if (not (memq system-type '(windows-nt ms-dos)))
+              '("foo*bar" "foo?bar")))
   "Prefixes to be tested for `file-name-non-special' tests.")
 
 (ert-deftest files-tests-file-name-non-special--subprocess ()
@@ -695,6 +696,8 @@ unquoted file names."
   (files-tests--with-temp-non-special-and-file-name-handler
       (tmpdir nospecial-dir t)
     (should-error (directory-files-and-attributes nospecial-dir))))
+
+(defvar w32-downcase-file-names)
 
 (ert-deftest files-tests-directory-files-recursively-w32 ()
   "Test MS-Windows specific features of `directory-files-recursively'."
@@ -1054,12 +1057,16 @@ unquoted file names."
 (ert-deftest files-tests-file-name-non-special-get-file-buffer ()
   ;; Make sure these buffers don't exist.
   (files-tests--with-temp-non-special (tmpfile nospecial)
+    (find-file-noselect nospecial)
     (let ((fbuf (get-file-buffer nospecial)))
-      (if fbuf (kill-buffer fbuf))
+      (should (get-file-buffer nospecial))
+      (kill-buffer fbuf)
       (should-not (get-file-buffer nospecial))))
   (files-tests--with-temp-non-special-and-file-name-handler (tmpfile nospecial)
+    (find-file-noselect nospecial)
     (let ((fbuf (get-file-buffer nospecial)))
-      (if fbuf (kill-buffer fbuf))
+      (should (get-file-buffer nospecial))
+      (kill-buffer fbuf)
       (should-not (get-file-buffer nospecial)))))
 
 (ert-deftest files-tests-file-name-non-special-insert-directory ()
@@ -2153,10 +2160,10 @@ CALLERS-DIR specifies the value to let-bind
             (setq nb-saved-buffers 0)
             (with-current-buffer (car buffers)
               (cl-letf
-                  (((symbol-function 'read-key)
+                  (((symbol-function 'read-key-sequence-vector)
                     ;; Increase counter and answer 'n' when prompted
                     ;; to save a buffer.
-                    (lambda (&rest _) (incf nb-saved-buffers) ?n))
+                    (lambda (&rest _) (incf nb-saved-buffers) [?n]))
                    ;; Do not kill Emacs.
                    ((symbol-function 'kill-emacs) #'ignore)
                    (save-some-buffers-default-predicate callers-dir))
@@ -2294,6 +2301,50 @@ Prompt users for any modified buffer with `buffer-offer-save' non-nil."
 (ert-deftest files-tests--expand-wildcards ()
   (should (file-expand-wildcards
            (concat (directory-file-name default-directory) "*/"))))
+
+(ert-deftest files-tests--make-empty-file--no-parent ()
+  (ert-with-temp-directory base
+    (let ((file (file-name-concat base "file.txt")))
+      (make-empty-file file)
+      (let ((attrs (file-attributes file)))
+        (should attrs)  ; file exists
+        (should-not (file-attribute-type attrs))  ; file is regular
+        (should (zerop (file-attribute-size attrs)))))))
+
+(ert-deftest files-tests--make-empty-file--parent ()
+  (ert-with-temp-directory base
+    (let ((file (file-name-concat base "dir" "file.txt")))
+      (make-empty-file file :parents)
+      (let ((attrs (file-attributes file)))
+        (should attrs)  ; file exists
+        (should-not (file-attribute-type attrs))  ; file is regular
+        (should (zerop (file-attribute-size attrs)))))))
+
+(ert-deftest files-tests--make-empty-file--exists ()
+  (ert-with-temp-directory base
+    (let ((file (file-name-concat base "file.txt")))
+      (write-region "" nil file nil nil nil 'excl)
+      (should-error (make-empty-file file)
+                    :type 'file-already-exists))))
+
+(ert-deftest files-tests--make-empty-file--parent-missing ()
+  (ert-with-temp-directory base
+    (let ((file (file-name-concat base "dir" "file.txt")))
+      (should-error (make-empty-file file) :type 'file-missing))))
+
+(ert-deftest files-tests--make-empty-file--tocttou ()
+  (ert-with-temp-directory base
+    (let ((file (file-name-concat base "one" "two" "file.txt")))
+      (cl-flet ((advice (&rest args)
+                  (write-region "" nil file nil nil nil 'excl)))
+        (unwind-protect
+            (progn
+              ;; Simulate that someone else has created the file after
+              ;; checking for its existence.
+              (advice-add #'make-directory :after #'advice)
+              (should-error (make-empty-file file :parents)
+                            :type 'file-already-exists))
+          (advice-remove #'make-directory #'advice))))))
 
 (provide 'files-tests)
 ;;; files-tests.el ends here

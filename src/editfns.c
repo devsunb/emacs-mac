@@ -1895,15 +1895,9 @@ determines whether case is significant or ignored.  */)
 #define OFFSET ptrdiff_t
 
 #define EXTRA_CONTEXT_FIELDS                    \
-  /* Buffers to compare.  */                    \
-  struct buffer *buffer_a;                      \
-  struct buffer *buffer_b;                      \
-  /* BEGV of each buffer */			\
-  ptrdiff_t beg_a;				\
-  ptrdiff_t beg_b;				\
-  /* Whether each buffer is unibyte/plain-ASCII or not.  */ \
-  bool a_unibyte;				\
-  bool b_unibyte;				\
+  /* Arrays of character codes to compare.  */	\
+  int *chars_a;					\
+  int *chars_b;					\
   /* Bit vectors recording for each character whether it was deleted
      or inserted.  */                           \
   unsigned char *deletions;                     \
@@ -1967,8 +1961,8 @@ in a temporary buffer.  Therefore, all else being equal, it is preferable
 to pass a buffer rather than a string as SOURCE argument.
 
 This function returns t if a non-destructive replacement could be
-performed.  Otherwise, i.e., if MAX-SECS was exceeded, it returns
-nil.
+performed.  Otherwise, i.e., if MAX-SECS was exceeded or too much
+memory would have been needed, it returns nil.
 
 SOURCE can also be a function that will be called with no arguments
 and with current buffer narrowed to BEG..END, and should return
@@ -2073,19 +2067,6 @@ a buffer or a string.  But this is deprecated.  */)
 
   specpdl_ref count = SPECPDL_INDEX ();
 
-  ptrdiff_t diags = size_a + size_b + 3;
-  ptrdiff_t del_bytes = size_a / CHAR_BIT + 1;
-  ptrdiff_t ins_bytes = size_b / CHAR_BIT + 1;
-  ptrdiff_t *buffer;
-  ptrdiff_t bytes_needed;
-  if (ckd_mul (&bytes_needed, diags, 2 * sizeof *buffer)
-      || ckd_add (&bytes_needed, bytes_needed, del_bytes + ins_bytes))
-    memory_full (SIZE_MAX);
-  USE_SAFE_ALLOCA;
-  buffer = SAFE_ALLOCA (bytes_needed);
-  unsigned char *deletions_insertions = memset (buffer + 2 * diags, 0,
-						del_bytes + ins_bytes);
-
   /* The rest of the code is not prepared to handle a string SOURCE.  */
   if (!b)
     {
@@ -2098,31 +2079,76 @@ a buffer or a string.  But this is deprecated.  */)
     }
   Lisp_Object source_buffer = make_lisp_ptr (b, Lisp_Vectorlike);
 
-  /* FIXME: It is not documented how to initialize the contents of the
-     context structure.  This code cargo-cults from the existing
-     caller in src/analyze.c of GNU Diffutils, which appears to
-     work.  */
-  struct context ctx = {
-    .buffer_a = a,
-    .buffer_b = b,
-    .beg_a = min_a,
-    .beg_b = min_b,
-    .a_unibyte = BUF_ZV (a) == BUF_ZV_BYTE (a),
-    .b_unibyte = BUF_ZV (b) == BUF_ZV_BYTE (b),
-    .deletions = deletions_insertions,
-    .insertions = deletions_insertions + del_bytes,
-    .fdiag = buffer + size_b + 1,
-    .bdiag = buffer + diags + size_b + 1,
-    .heuristic = true,
-    .too_expensive = too_expensive,
-    .time_limit = time_limit,
-  };
+  ptrdiff_t diags = size_a + size_b + 3;
+  ptrdiff_t bytes_per_diag = 2 * sizeof (ptrdiff_t) + sizeof (int);
+  ptrdiff_t surplus_char_bytes = 3 * sizeof (int);
+  ptrdiff_t align_bytes = (alignof (ptrdiff_t) < alignof (int)
+			   ? alignof (int) - alignof (ptrdiff_t) : 0);
+  ptrdiff_t del_bytes = size_a / CHAR_BIT + 1;
+  ptrdiff_t ins_bytes = size_b / CHAR_BIT + 1;
+  ptrdiff_t *buffer;
+  ptrdiff_t bytes_needed;
+  if (ckd_mul (&bytes_needed, diags, bytes_per_diag)
+      || ckd_add (&bytes_needed, bytes_needed,
+		  align_bytes - surplus_char_bytes + del_bytes + ins_bytes)
+      || SIZE_MAX < bytes_needed)
+    buffer = NULL;
+  else if (bytes_needed <= MAX_ALLOCA)
+    buffer = alloca (bytes_needed);
+  else
+    {
+      buffer = malloc (bytes_needed);
+      if (buffer)
+	{
+	  if (profiler_memory_running)
+	    malloc_probe (bytes_needed);
+	  record_unwind_protect_ptr (xfree, buffer);
+	}
+    }
 
-  /* compareseq requires indices to be zero-based.  We add BEGV back
-     later.  */
   bool early_abort;
-  if (! sys_setjmp (ctx.jmp))
-    early_abort = compareseq (0, size_a, 0, size_b, false, &ctx);
+  struct context ctx;
+
+  if (buffer)
+    {
+      /* Copy the characters to arrays of C ints.  This speeds up
+	 comparison dramatically in multibyte buffers.  */
+      int *chars_a = (int *) (((uintptr_t) (buffer + 2 * diags) + align_bytes)
+			      & ~align_bytes);
+      for (ptrdiff_t i = 0; i < size_a; i++)
+	chars_a[i] = (BUF_FETCH_CHAR_AS_MULTIBYTE
+		      (a, buf_charpos_to_bytepos (a, min_a + i)));
+
+      int *chars_b = chars_a + size_a;
+      for (ptrdiff_t i = 0; i < size_b; i++)
+	chars_b[i] = (BUF_FETCH_CHAR_AS_MULTIBYTE
+		      (b, buf_charpos_to_bytepos (b, min_b + i)));
+
+      unsigned char *deletions_insertions = memset (chars_b + size_b, 0,
+						    del_bytes + ins_bytes);
+
+      /* FIXME: It is not documented how to initialize the contents of the
+	 context structure.  This code cargo-cults from the existing
+	 caller in src/analyze.c of GNU Diffutils, which appears to
+	 work.  */
+      ctx = (struct context) {
+	.chars_a = chars_a,
+	.chars_b = chars_b,
+	.deletions = deletions_insertions,
+	.insertions = deletions_insertions + del_bytes,
+	.fdiag = buffer + size_b + 1,
+	.bdiag = buffer + diags + size_b + 1,
+	.heuristic = true,
+	.too_expensive = too_expensive,
+	.time_limit = time_limit,
+      };
+
+      /* compareseq wants zero-based indices.  We add BEGV back later.  */
+      if (! sys_setjmp (ctx.jmp))
+	early_abort = compareseq (0, size_a, 0, size_b, false, &ctx);
+      else
+	early_abort = true;
+    }
   else
     early_abort = true;
 
@@ -2132,8 +2158,7 @@ a buffer or a string.  But this is deprecated.  */)
 			       make_fixnum (BUF_BEGV (b)),
 			       make_fixnum (BUF_ZV (b)));
       replace_range (min_a, min_a + size_a, src, true, false, inh);
-      SAFE_FREE_UNBIND_TO (count, Qnil);
-      return Qnil;
+      return unbind_to (count, Qnil);
     }
 
   Fundo_boundary ();
@@ -2187,7 +2212,7 @@ a buffer or a string.  But this is deprecated.  */)
       --j;
     }
 
-  SAFE_FREE_UNBIND_TO (count, Qnil);
+  unbind_to (count, Qnil);
 
   if (modification_hooks_inhibited)
     {
@@ -2219,17 +2244,17 @@ bit_is_set (const unsigned char *a, ptrdiff_t i)
   return a[i / CHAR_BIT] & (1 << (i % CHAR_BIT));
 }
 
-/* Return true if the characters at position POS_A of buffer
-   CTX->buffer_a and at position POS_B of buffer CTX->buffer_b are
+/* Return true if the characters at position POS_A in the first stretch
+   of text to be compared and at position POS_B of the second one are
    equal.  POS_A and POS_B are zero-based.  Text properties are
    ignored.
 
    Implementation note: this function is called inside the inner-most
    loops of compareseq, so it absolutely must be optimized for speed,
-   every last bit of it.  E.g., each additional use of BEGV or such
-   likes will slow down replace-buffer-contents by dozens of percents,
-   because builtin_lisp_symbol will be called one more time in the
-   innermost loop.  */
+   every last bit of it.  E.g., each use of BEGV or such likes will slow
+   down replace-buffer-contents by dozens of percents, because
+   builtin_lisp_symbol will be called one more time in the innermost
+   loop.  */
 
 static bool
 buffer_chars_equal (struct context *ctx,
@@ -2242,29 +2267,7 @@ buffer_chars_equal (struct context *ctx,
 	sys_longjmp (ctx->jmp, 1);
     }
 
-  pos_a += ctx->beg_a;
-  pos_b += ctx->beg_b;
-
-  ptrdiff_t bpos_a =
-    ctx->a_unibyte ? pos_a : buf_charpos_to_bytepos (ctx->buffer_a, pos_a);
-  ptrdiff_t bpos_b =
-    ctx->b_unibyte ? pos_b : buf_charpos_to_bytepos (ctx->buffer_b, pos_b);
-
-  /* We make the below a series of specific test to avoid using
-     BUF_FETCH_CHAR_AS_MULTIBYTE, which references Lisp symbols, and
-     is therefore significantly slower (see the note in the commentary
-     to this function).  */
-  if (ctx->a_unibyte && ctx->b_unibyte)
-    return BUF_FETCH_BYTE (ctx->buffer_a, bpos_a)
-      == BUF_FETCH_BYTE (ctx->buffer_b, bpos_b);
-  if (ctx->a_unibyte && !ctx->b_unibyte)
-    return UNIBYTE_TO_CHAR (BUF_FETCH_BYTE (ctx->buffer_a, bpos_a))
-      == BUF_FETCH_MULTIBYTE_CHAR (ctx->buffer_b, bpos_b);
-  if (!ctx->a_unibyte && ctx->b_unibyte)
-    return BUF_FETCH_MULTIBYTE_CHAR (ctx->buffer_a, bpos_a)
-      == UNIBYTE_TO_CHAR (BUF_FETCH_BYTE (ctx->buffer_b, bpos_b));
-  return BUF_FETCH_MULTIBYTE_CHAR (ctx->buffer_a, bpos_a)
-    == BUF_FETCH_MULTIBYTE_CHAR (ctx->buffer_b, bpos_b);
+  return ctx->chars_a[pos_a] == ctx->chars_b[pos_b];
 }
 
 static bool
@@ -2450,7 +2453,7 @@ check_translation (ptrdiff_t pos, ptrdiff_t pos_byte, ptrdiff_t end,
 {
   int initial_buf[16];
   int *buf = initial_buf;
-  ptrdiff_t buf_size = ARRAYELTS (initial_buf);
+  ptrdiff_t buf_size = countof (initial_buf);
   int *bufalloc = 0;
   ptrdiff_t buf_used = 0;
   Lisp_Object result = Qnil;
@@ -3442,15 +3445,16 @@ styled_format (ptrdiff_t nargs, Lisp_Object *args, bool message)
    /* Maximum precision for a %f conversion such that the trailing
       output digit might be nonzero.  Any precision larger than this
       will not yield useful information.  */
-   USEFUL_PRECISION_MAX = ((1 - LDBL_MIN_EXP)
+   USEFUL_PRECISION_MAX = ((DBL_MANT_DIG - DBL_MIN_EXP)
 			   * (FLT_RADIX == 2 || FLT_RADIX == 10 ? 1
 			      : FLT_RADIX == 16 ? 4
 			      : -1)),
 
    /* Maximum number of bytes (including terminating null) generated
       by any format, if precision is no more than USEFUL_PRECISION_MAX.
-      On all practical hosts, %Lf is the worst case.  */
-   SPRINTF_BUFSIZE = (sizeof "-." + (LDBL_MAX_10_EXP + 1)
+      On all practical hosts %f is the worst case, as %Lf is used only
+      on arguments exactly representable as intmax_t or uintmax_t.  */
+   SPRINTF_BUFSIZE = (sizeof "-." + (DBL_MAX_10_EXP + 1)
 		      + USEFUL_PRECISION_MAX)
   };
   static_assert (USEFUL_PRECISION_MAX > 0);
@@ -3472,7 +3476,9 @@ styled_format (ptrdiff_t nargs, Lisp_Object *args, bool message)
   Lisp_Object val;
   bool arg_intervals = false;
   USE_SAFE_ALLOCA;
-  sa_avail -= sizeof initial_buffer;
+  /* Do not bother doing "sa_avail -= sizeof initial_buffer;" here,
+     as it is OK to go somewhat over MAX_ALLOCA bytes
+     for this particular function's stack frame.  */
 
   /* Information recorded for each format spec.  */
   struct info
@@ -3490,29 +3496,35 @@ styled_format (ptrdiff_t nargs, Lisp_Object *args, bool message)
   CHECK_STRING (args[0]);
   bool multibyte_format = STRING_MULTIBYTE (args[0]);
   ptrdiff_t formatlen = SBYTES (args[0]);
-  char *format_start = SAFE_ALLOCA (formatlen + 1);
-  memcpy (format_start, SSDATA (args[0]), formatlen + 1);
   bool fmt_props = !!string_intervals (args[0]);
 
   /* Upper bound on number of format specs.  Each uses at least 2 chars.  */
   ptrdiff_t nspec_bound = SCHARS (args[0]) >> 1;
 
-  /* Allocate the info and discarded tables.  */
-  ptrdiff_t info_size, alloca_size;
-  if (ckd_mul (&info_size, nspec_bound, sizeof *info)
-      || ckd_add (&alloca_size, formatlen, info_size)
-      || SIZE_MAX < alloca_size)
-    memory_full (SIZE_MAX);
-  info = SAFE_ALLOCA (alloca_size);
   /* One argument belonging to each spec; but needs to be allocated
      separately so GC doesn't free the strings (bug#75754).  */
   Lisp_Object *spec_arguments;
   SAFE_ALLOCA_LISP (spec_arguments, nspec_bound);
-  /* discarded[I] is 1 if byte I of the format
-     string was not copied into the output.
-     It is 2 if byte I was not the first byte of its character.  */
-  char *discarded = (char *) &info[nspec_bound];
-  memset (discarded, 0, formatlen);
+  /* Allocate other auxiliary tables in one go, in the order:
+     info[nspec_bound], format_start[formatlen + 1], discarded[formatlen].  */
+  ptrdiff_t info_size, format_and_discarded_size, alloca_size;
+  bool v = ckd_mul (&info_size, nspec_bound, sizeof *info);
+  v |= ckd_add (&format_and_discarded_size, formatlen + 1, formatlen);
+  v |= ckd_add (&alloca_size, info_size, format_and_discarded_size);
+  v |= SIZE_MAX < alloca_size;
+  if (v)
+    memory_full_up ();
+  /* The info table.  */
+  info = SAFE_ALLOCA (alloca_size);
+  /* A copy of the format string's bytes, needed because the original
+     may not survive GC.  */
+  char *format_start = memcpy (&info[nspec_bound],
+			       SSDATA (args[0]), formatlen + 1);
+  /* discarded[I] is:
+       1 if byte I of the format string was not copied into the output.
+       2 if byte I was not the first byte of its character.
+       0 otherwise.  */
+  char *discarded = memset (&format_start[formatlen + 1], 0, formatlen);
 
   /* Try to determine whether the result should be multibyte.
      This is not always right; sometimes the result needs to be multibyte
@@ -4389,7 +4401,7 @@ styled_format (ptrdiff_t nargs, Lisp_Object *args, bool message)
 	      props = extend_property_ranges (props, len, new_len);
 	      /* If successive arguments have properties, be sure that
 		 the value of `composition' property be the copy.  */
-	      if (1 < i && info[i - 1].end)
+	      if (1 <= i && info[i - 1].end)
 		make_composition_value_copy (props);
 	      add_text_properties_from_list (val, props,
 					     make_fixnum (info[i].start));
@@ -4397,7 +4409,7 @@ styled_format (ptrdiff_t nargs, Lisp_Object *args, bool message)
     }
 
  return_val:
-  /* If we allocated BUF or INFO with malloc, free it too.  */
+  /* If we allocated BUF or auxiliary tables with malloc, free them too.  */
   SAFE_FREE ();
 
   return val;

@@ -66,11 +66,9 @@ enum { TM_YEAR_BASE = 1900 };
 # define FASTER_TIMEFNS 1
 #endif
 
-/* current-time-list defaults to t, typically generating (HI LO US PS)
-   timestamps.  To change the default to nil, generating (TICKS . HZ)
-   timestamps, compile with -DCURRENT_TIME_LIST=0.  */
+/* current-time-list defaults to nil, generating (TICKS . HZ) timestamps.  */
 #ifndef CURRENT_TIME_LIST
-enum { CURRENT_TIME_LIST = true };
+enum { CURRENT_TIME_LIST = false };
 #endif
 
 #if FASTER_TIMEFNS && !FIXNUM_OVERFLOW_P (1000000000)
@@ -213,7 +211,7 @@ emacs_localtime_rz (timezone_t tz, time_t const *t, struct tm *tm)
 #endif
   tm = localtime_rz (tz, t, tm);
   if (!tm && errno == ENOMEM)
-    memory_full (SIZE_MAX);
+    memory_full_up ();
   return tm;
 }
 
@@ -317,7 +315,7 @@ tzlookup (Lisp_Object zone, bool settz)
       if (!new_tz)
 	{
 	  if (errno == ENOMEM)
-	    memory_full (SIZE_MAX);
+	    memory_full_up ();
 	  invalid_time_zone_specification (zone);
 	}
     }
@@ -367,7 +365,7 @@ time_error (int err)
 {
   switch (err)
     {
-    case ENOMEM: memory_full (SIZE_MAX);
+    case ENOMEM: memory_full_up ();
     case EOVERFLOW: time_overflow ();
     default: time_spec_invalid ();
     }
@@ -2112,14 +2110,12 @@ syms_of_timefns (void)
   DEFVAR_BOOL ("current-time-list", current_time_list,
 	       doc: /* Whether `current-time' should return list or (TICKS . HZ) form.
 
-This boolean variable is a transition aid.  If t, `current-time' and
-related functions return timestamps in list form, typically
-\(HIGH LOW USEC PSEC); otherwise, they use (TICKS . HZ) form.
-Currently this variable defaults to t, for behavior compatible with
-previous Emacs versions.  Developers are encouraged to test
-timestamp-related code with this variable set to nil, as it will
-default to nil in a future Emacs version, and will be removed in some
-version after that.  */);
+This boolean variable is a transition aid.  If nil (the default),
+`current-time' and related functions return timestamps in (TICKS . HZ)
+form.  If t, these functions return in list form, typically (HIGH LOW
+USEC PSEC), for behavior compatible with previous Emacs versions.  As it
+is merely a transition aid, this variable is planned to be removed in
+some future Emacs version.  */);
   current_time_list = CURRENT_TIME_LIST;
 
   defsubr (&Scurrent_time);
