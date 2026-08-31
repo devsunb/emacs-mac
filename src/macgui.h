@@ -22,6 +22,8 @@ along with GNU Emacs Mac port.  If not, see <https://www.gnu.org/licenses/>.  */
 #ifndef EMACS_MACGUI_H
 #define EMACS_MACGUI_H
 
+#define WINDOW_HANDLE_UINTPTR(h) ((uintptr_t) (h))
+
 typedef Lisp_Object XrmDatabase;
 
 #ifdef Z

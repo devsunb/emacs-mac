@@ -1358,7 +1358,7 @@ static bool handling_queued_nsevents_p;
   Lisp_Object keymap = get_keymap (Vmac_apple_event_map, 0, 0);
 
   if (!NILP (keymap))
-    keymap = get_keymap (access_keymap (keymap, Qapplication_kvo, 0, 1, 0),
+    keymap = get_keymap (access_keymap (keymap, Qapplication_kvo, 0, 1),
 			 0, 0);
   if (!NILP (keymap))
     {
@@ -8632,7 +8632,7 @@ static BOOL NonmodalScrollerPagingBehavior;
   CGFloat knobProportion = [self knobProportion];
   const NSControlSize controlSizes[] =
     {NSControlSizeRegular, NSControlSizeSmall}; /* Descending */
-  int i, count = ARRAYELTS (controlSizes);
+  int i, count = countof (controlSizes);
   NSRect knobRect, bounds = [self bounds];
   CGFloat shorterDimension =
     !isHorizontal ? NSWidth (bounds) : NSHeight (bounds);
@@ -11569,7 +11569,7 @@ mac_fake_menu_bar_click (EventPriority priority)
 	    {kEventParamClickCount, typeUInt32, sizeof (UInt32), &count}};
 	  int j;
 
-	  for (j = 0; j < ARRAYELTS (params); j++)
+	  for (j = 0; j < countof (params); j++)
 	    if (err == noErr)
 	      err = SetEventParameter (event, params[j].name, params[j].type,
 				       params[j].size, params[j].data);
@@ -13202,16 +13202,16 @@ is_services_handler_selector (SEL selector)
       Lisp_Object tem = get_keymap (Vmac_apple_event_map, 0, 0);
 
       if (!NILP (tem))
-	tem = get_keymap (access_keymap (tem, Qservice, 0, 1, 0), 0, 0);
+	tem = get_keymap (access_keymap (tem, Qservice, 0, 1), 0, 0);
       if (!NILP (tem))
-	tem = get_keymap (access_keymap (tem, Qperform, 0, 1, 0), 0, 0);
+	tem = get_keymap (access_keymap (tem, Qperform, 0, 1), 0, 0);
       if (!NILP (tem))
 	{
 	  NSUInteger index = [name length] - (sizeof (":userData:error:") - 1);
 
 	  name = [name substringToIndex:index];
 	  tem = access_keymap (tem, intern (SSDATA ([name UTF8LispString])),
-			       0, 1, 0);
+			       0, 1);
 	}
       if (!NILP (tem) && !EQ (tem, Qundefined))
 	return YES;
@@ -13278,7 +13278,7 @@ handle_services_invocation (NSInvocation *invocation)
 	  if (err == noErr)
 	    err = mac_store_event_ref_as_apple_event (0, 0, Qservice,
 						      Qperform, event,
-						      ARRAYELTS (names),
+						      countof (names),
 						      names, types);
 	  ReleaseEvent (event);
 	}
@@ -13326,12 +13326,12 @@ is_action_selector (SEL selector)
       Lisp_Object tem = get_keymap (Vmac_apple_event_map, 0, 0);
 
       if (!NILP (tem))
-	tem = get_keymap (access_keymap (tem, Qaction, 0, 1, 0), 0, 0);
+	tem = get_keymap (access_keymap (tem, Qaction, 0, 1), 0, 0);
       if (!NILP (tem))
 	{
 	  name = [name substringToIndex:([name length] - 1)];
 	  tem = access_keymap (tem, intern (SSDATA ([name UTF8LispString])),
-			       0, 1, 0);
+			       0, 1);
 	}
       if (!NILP (tem) && !EQ (tem, Qundefined))
 	return YES;
@@ -15288,7 +15288,7 @@ static const struct {
     &NSAccessibilitySelectedTextRangesAttribute,
     CFSTR ("AXSelectedTextRanges"), ax_get_selected_text_ranges},
 };
-static const size_t ax_attribute_count = ARRAYELTS (ax_attribute_table);
+static const size_t ax_attribute_count = countof (ax_attribute_table);
 static NSArrayOf (NSAccessibilityAttributeName) *ax_attribute_names;
 static Lisp_Object ax_attribute_event_ids;
 
@@ -15319,7 +15319,7 @@ static const struct {
    ax_get_attributed_string_for_range},
 };
 static const size_t ax_parameterized_attribute_count =
-  ARRAYELTS (ax_parameterized_attribute_table);
+  countof (ax_parameterized_attribute_table);
 static NSArrayOf (NSAccessibilityParameterizedAttributeName)
   *ax_parameterized_attribute_names;
 
@@ -15329,7 +15329,7 @@ static const struct {
 } ax_action_table[] = {
   {&NSAccessibilityShowMenuAction, NULL},
 };
-static const size_t ax_action_count = ARRAYELTS (ax_action_table);
+static const size_t ax_action_count = countof (ax_action_table);
 static NSArrayOf (NSAccessibilityActionName) *ax_action_names;
 static Lisp_Object ax_action_event_ids;
 
@@ -15542,10 +15542,10 @@ ax_get_selected_text_ranges (EmacsMainView *emacsView)
       Lisp_Object tem = get_keymap (Vmac_apple_event_map, 0, 0);
 
       if (!NILP (tem))
-	tem = get_keymap (access_keymap (tem, Qaccessibility, 0, 1, 0), 0, 0);
+	tem = get_keymap (access_keymap (tem, Qaccessibility, 0, 1), 0, 0);
       if (!NILP (tem))
 	tem = access_keymap (tem, AREF (ax_attribute_event_ids, index),
-			     0, 1, 0);
+			     0, 1);
 
       return !NILP (tem) && !EQ (tem, Qundefined);
     }
