@@ -4986,11 +4986,13 @@ static Lisp_Object
 mac_preprocess_image_for_2x_file (struct frame *f, struct image *img,
 				  Lisp_Object file, int *pfd)
 {
-  Lisp_Object file_2x = mac_find_2x_image_file (file, pfd);
+  int backing_scale = FRAME_BACKING_SCALE_FACTOR (f);
+  Lisp_Object file_2x =
+    mac_find_2x_image_file (file, backing_scale == 2 ? pfd : NULL);
 
   if (!NILP (file_2x))
     {
-      img->target_backing_scale = FRAME_BACKING_SCALE_FACTOR (f);
+      img->target_backing_scale = backing_scale;
       if (img->target_backing_scale == 2)
 	file = file_2x;
     }
